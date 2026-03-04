@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom'
 import {
   Shield, Activity, Bug, FileText, Settings,
-  Terminal, ChevronRight, Wifi, WifiOff, BarChart2, Network
+  Terminal, ChevronRight, Wifi, WifiOff, BarChart2, Network, Link2
 } from 'lucide-react'
 import Dashboard from './pages/Dashboard.jsx'
 import LiveScan from './pages/LiveScan.jsx'
@@ -10,6 +10,7 @@ import Vulnerabilities from './pages/Vulnerabilities.jsx'
 import Reports from './pages/Reports.jsx'
 import NewScan from './pages/NewScan.jsx'
 import AttackGraph from './pages/AttackGraph.jsx'
+import AttackChains from './pages/AttackChains.jsx'
 
 export default function App() {
   const [apiStatus, setApiStatus] = useState('checking')
@@ -26,6 +27,7 @@ export default function App() {
     { to: '/live', icon: Activity, label: 'Live Monitor' },
     { to: '/vulnerabilities', icon: Bug, label: 'Vulnerabilities' },
     { to: '/attack-graph', icon: Network, label: 'Attack Graph' },
+    { to: '/attack-chains', icon: Link2, label: 'Attack Chains' },
     { to: '/reports', icon: FileText, label: 'Reports' },
   ]
 
@@ -106,6 +108,8 @@ export default function App() {
             <Route path="/vulnerabilities/:scanId" element={<Vulnerabilities />} />
             <Route path="/attack-graph" element={<AttackGraph />} />
             <Route path="/attack-graph/:scanId" element={<AttackGraph />} />
+            <Route path="/attack-chains" element={<AttackChains />} />
+            <Route path="/attack-chains/:scanId" element={<AttackChains />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/reports/:scanId" element={<Reports />} />
           </Routes>
