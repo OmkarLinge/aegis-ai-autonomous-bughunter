@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Dict, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
@@ -37,8 +37,8 @@ logger = get_logger(__name__, "FINGERPRINT")
 
 
 # ── Type alias ───────────────────────────────────────────────────────────────
-FingerprintDict = Dict[str, object]
-FingerprintDiff = Dict[str, object]
+FingerprintDict = Dict[str, Any]
+FingerprintDiff = Dict[str, Any]
 
 
 class ResponseFingerprint:

@@ -78,7 +78,7 @@ class XSSVerifier:
         result = XSSVerificationResult()
 
         baseline_resp = await engine.get_baseline(url)
-        if baseline_resp.error:
+        if baseline_resp is None or baseline_resp.error:
             return result
 
         for payload in XSS_PAYLOADS:

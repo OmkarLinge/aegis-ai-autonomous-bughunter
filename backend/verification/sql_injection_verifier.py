@@ -134,7 +134,7 @@ class SQLInjectionVerifier:
 
         # Baseline fingerprint
         baseline_resp = await engine.get_baseline(url)
-        if baseline_resp.error:
+        if baseline_resp is None or baseline_resp.error:
             return result
         baseline_fp = ResponseFingerprint.build(baseline_resp)
         result.baseline_fingerprint = baseline_fp
