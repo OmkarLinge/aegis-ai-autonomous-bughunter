@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Shield, Bug, Globe, Clock, TrendingUp, AlertTriangle,
-  Activity, ArrowRight, Plus, ChevronRight
+  Activity, ArrowRight, Plus, ChevronRight, Gauge, CalendarClock,
+  Power, Trash2
 } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -19,20 +20,41 @@ const SEVERITY_COLORS = {
   LOW: '#10b981',
 }
 
+const RISK_COLORS = {
+  CRITICAL: { ring: 'text-red-500', bg: 'bg-red-950/40', border: 'border-red-700/50', text: 'text-red-400' },
+  HIGH:     { ring: 'text-orange-500', bg: 'bg-orange-950/30', border: 'border-orange-700/40', text: 'text-orange-400' },
+  MEDIUM:   { ring: 'text-amber-500', bg: 'bg-amber-950/30', border: 'border-amber-700/40', text: 'text-amber-400' },
+  LOW:      { ring: 'text-emerald-500', bg: 'bg-emerald-950/30', border: 'border-emerald-700/40', text: 'text-emerald-400' },
+  SECURE:   { ring: 'text-cyan-500', bg: 'bg-cyan-950/30', border: 'border-cyan-700/40', text: 'text-cyan-400' },
+}
+
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
   const [scans, setScans] = useState([])
+  const [riskScore, setRiskScore] = useState(null)
+  const [schedules, setSchedules] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [statsRes, scansRes] = await Promise.all([
+        const [statsRes, scansRes, schedRes] = await Promise.all([
           fetch(`${API}/stats`).then(r => r.json()),
           fetch(`${API}/scans`).then(r => r.json()),
+          fetch(`${API}/schedules`).then(r => r.json()).catch(() => ({ schedules: [] })),
         ])
         setStats(statsRes)
-        setScans(scansRes.scans || [])
+        const scanList = scansRes.scans || []
+        setScans(scanList)
+        setSchedules(schedRes.schedules || [])
+
+        // Fetch risk score for the most recent completed scan
+        const completed = scanList.filter(s => s.status === 'completed')
+        if (completed.length > 0) {
+          const latest = completed[0]
+          const riskRes = await fetch(`${API}/scans/${latest.scan_id}/risk-score`).then(r => r.json()).catch(() => null)
+          setRiskScore(riskRes)
+        }
       } catch (e) {
         console.error('Failed to load dashboard:', e)
       } finally {
@@ -108,6 +130,49 @@ export default function Dashboard() {
           color="green"
           trend="Running now"
         />
+      </div>
+
+      {/* Security Score + Severity Distribution row */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-6">
+        {/* Security Score gauge */}
+        <div className={`card p-5 flex flex-col items-center justify-center border ${
+          riskScore ? (RISK_COLORS[riskScore.risk_level] || RISK_COLORS.SECURE).border : 'border-aegis-border'
+        }`}>
+          <h3 className="font-semibold text-white mb-3 text-sm uppercase tracking-wider">Security Score</h3>
+          {riskScore ? (
+            <>
+              <div className="relative w-28 h-28 mb-3">
+                <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
+                  <circle cx="60" cy="60" r="50" fill="none" stroke="#1e293b" strokeWidth="10" />
+                  <circle
+                    cx="60" cy="60" r="50" fill="none"
+                    stroke={riskScore.score >= 80 ? '#10b981' : riskScore.score >= 60 ? '#f59e0b' : riskScore.score >= 30 ? '#f97316' : '#ef4444'}
+                    strokeWidth="10"
+                    strokeLinecap="round"
+                    strokeDasharray={`${riskScore.score * 3.14} 314`}
+                  />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-3xl font-display font-bold text-white">{riskScore.score}</span>
+                  <span className="text-[10px] text-aegis-muted">/100</span>
+                </div>
+              </div>
+              <span className={`text-xs font-bold uppercase tracking-wider ${(RISK_COLORS[riskScore.risk_level] || RISK_COLORS.SECURE).text}`}>
+                {riskScore.risk_level}
+              </span>
+              {riskScore.recommendations?.[0] && (
+                <p className="text-[10px] text-aegis-muted text-center mt-2 leading-relaxed px-2">
+                  {riskScore.recommendations[0].slice(0, 80)}…
+                </p>
+              )}
+            </>
+          ) : (
+            <div className="flex flex-col items-center gap-2 py-6">
+              <Gauge size={32} className="text-aegis-muted opacity-40" />
+              <p className="text-xs text-aegis-muted">Run a scan to compute</p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Charts row */}
@@ -228,6 +293,41 @@ export default function Dashboard() {
                     <ChevronRight size={16} />
                   </Link>
                 </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Scheduled Scans */}
+      <div className="card mb-6">
+        <div className="p-5 border-b border-aegis-border flex items-center justify-between">
+          <h3 className="font-semibold text-white flex items-center gap-2">
+            <CalendarClock size={16} className="text-aegis-accent" />
+            Scheduled Scans
+          </h3>
+          <span className="text-xs text-aegis-muted font-mono">{schedules.length} schedule{schedules.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div className="divide-y divide-aegis-border">
+          {schedules.length === 0 ? (
+            <div className="p-6 text-center">
+              <CalendarClock size={28} className="mx-auto text-aegis-muted mb-2 opacity-40" />
+              <p className="text-aegis-muted text-sm">No scheduled scans</p>
+              <p className="text-aegis-muted/60 text-xs mt-1">Use the API to create recurring scans</p>
+            </div>
+          ) : (
+            schedules.slice(0, 5).map(sched => (
+              <div key={sched.id} className="flex items-center gap-4 p-4 hover:bg-aegis-card/30 transition-colors">
+                <div className={`w-2 h-2 rounded-full ${sched.enabled ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+                <div className="flex-1 min-w-0">
+                  <div className="font-mono text-sm text-white truncate">{sched.target_url}</div>
+                  <div className="text-xs text-aegis-muted font-mono">
+                    {sched.frequency} · Next: {sched.time_until_next} · Runs: {sched.run_count}
+                  </div>
+                </div>
+                <span className={`text-xs font-mono px-2 py-0.5 rounded ${sched.enabled ? 'bg-emerald-950 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}>
+                  {sched.enabled ? 'ACTIVE' : 'PAUSED'}
+                </span>
               </div>
             ))
           )}
