@@ -23,6 +23,9 @@ from backend.analysis.risk_propagation import RiskPropagationEngine
 from backend.analysis.attack_chain_engine import AttackChainEngine
 from backend.analysis.risk_scoring_engine import RiskScoringEngine
 from backend.analysis.deduplication_engine import DeduplicationEngine
+from backend.verification.verification_engine import VerificationEngine
+from backend.analysis.false_positive_filter import FalsePositiveFilter
+from backend.analysis.exploit_simulation import ExploitSimulationEngine
 from backend.security_intelligence.cve_engine import CVEEngine
 from utils.logger import get_logger
 from utils.config import config
@@ -308,6 +311,100 @@ class ScanOrchestrator:
                 "data": dedup_stats,
             })
 
+            # ── Phase 4a.1: Multi-Stage Verification ───────────────────────
+            state["current_agent"] = "VERIFIER"
+            await self._broadcast(scan_id, {
+                "type": "agent_event",
+                "agent": "VERIFIER",
+                "event_type": "VERIFY_START",
+                "message": f"Running multi-stage verification on {len(findings)} findings…",
+            })
+
+            verification_engine = VerificationEngine()
+            for f in findings:
+                try:
+                    v_result = await verification_engine.verify(
+                        vuln_type=f.vuln_type,
+                        url=f.url,
+                        parameter=f.parameter,
+                        engine=exploit_agent.engine,
+                    )
+                    if v_result.verified:
+                        f.verified = True
+                        f.confidence = max(f.confidence, v_result.confidence)
+                    elif v_result.confidence < 0.3:
+                        f.confidence = min(f.confidence, v_result.confidence)
+                except Exception as ve:
+                    logger.debug(f"Verification error for {f.url}: {ve}")
+
+            v_stats = verification_engine.get_stats()
+            state["verification_stats"] = v_stats
+
+            logger.info(
+                "[ORCHESTRATOR] Verification: %d total, %d verified, %d rejected",
+                v_stats["total"], v_stats["verified"], v_stats["rejected"],
+            )
+
+            await self._broadcast(scan_id, {
+                "type": "verification_complete",
+                "agent": "VERIFIER",
+                "message": (
+                    f"Verification complete: {v_stats['verified']} confirmed, "
+                    f"{v_stats['rejected']} rejected out of {v_stats['total']}"
+                ),
+                "data": v_stats,
+            })
+
+            # ── Phase 4a.2: False Positive Suppression ─────────────────────
+            state["current_agent"] = "FP_FILTER"
+            await self._broadcast(scan_id, {
+                "type": "agent_event",
+                "agent": "FP_FILTER",
+                "event_type": "FILTER_START",
+                "message": f"Applying false-positive suppression to {len(findings)} findings…",
+            })
+
+            fp_filter = FalsePositiveFilter()
+            finding_dicts = [self._finding_to_dict(f) for f in findings]
+            scored_findings = fp_filter.process(finding_dicts)
+            fp_stats = fp_filter.get_stats()
+
+            # Keep only confirmed + suspicious (drop suppressed & informational-only)
+            confirmed_scored = fp_filter.get_confirmed()
+            informational_scored = fp_filter.get_informational()
+
+            # Rebuild findings list from scored results
+            kept_urls_types = {(s.finding["url"], s.finding["vuln_type"]) for s in confirmed_scored}
+            findings = [f for f in findings if (f.url, f.vuln_type) in kept_urls_types]
+
+            # Update confidence from blended scores
+            score_map = {(s.finding["url"], s.finding["vuln_type"]): s for s in confirmed_scored}
+            for f in findings:
+                key = (f.url, f.vuln_type)
+                if key in score_map:
+                    f.confidence = score_map[key].blended_score
+
+            state["fp_filter_stats"] = fp_stats
+
+            logger.info(
+                "[ORCHESTRATOR] FP Filter: %d confirmed, %d suspicious, %d informational, %d suppressed",
+                fp_stats.get("confirmed", 0),
+                fp_stats.get("suspicious", 0),
+                fp_stats.get("informational", 0),
+                fp_stats.get("suppressed", 0),
+            )
+
+            await self._broadcast(scan_id, {
+                "type": "fp_filter_complete",
+                "agent": "FP_FILTER",
+                "message": (
+                    f"FP filter: {fp_stats.get('confirmed',0)} confirmed, "
+                    f"{fp_stats.get('suspicious',0)} suspicious, "
+                    f"{fp_stats.get('suppressed',0)} suppressed"
+                ),
+                "data": fp_stats,
+            })
+
             # Build final attack graph with vulnerabilities (legacy)
             final_graph = strategy_agent.build_attack_graph(classified, findings)
 
@@ -471,6 +568,39 @@ class ScanOrchestrator:
                 "data": risk_result,
             })
 
+            # ── Phase 4f: Exploit Simulation ────────────────────────────────
+            state["current_agent"] = "EXPLOIT_SIM"
+            await self._broadcast(scan_id, {
+                "type": "agent_event",
+                "agent": "EXPLOIT_SIM",
+                "event_type": "SIM_START",
+                "message": "Simulating multi-step exploit chains…",
+            })
+
+            sim_engine = ExploitSimulationEngine()
+            simulations = sim_engine.simulate(
+                [self._finding_to_dict(f) for f in findings]
+            )
+            state["exploit_simulations"] = sim_engine.to_dict(simulations)
+
+            logger.info(
+                "[ORCHESTRATOR] Exploit simulation: %d scenarios generated",
+                len(simulations),
+            )
+
+            await self._broadcast(scan_id, {
+                "type": "exploit_sim_complete",
+                "agent": "EXPLOIT_SIM",
+                "message": f"Generated {len(simulations)} exploit simulation scenarios",
+                "data": {
+                    "simulation_count": len(simulations),
+                    "simulations": [
+                        {"name": s.name, "severity": s.severity}
+                        for s in simulations[:5]
+                    ],
+                },
+            })
+
             state["progress"] = 80
 
             severity_counts = {
@@ -502,6 +632,9 @@ class ScanOrchestrator:
                 agent_reasoning=state["reasoning"],
                 attack_graph=final_graph,
                 dedup_stats=dedup_stats,
+                fp_filter_stats=fp_stats,
+                verification_stats=v_stats,
+                exploit_simulations=state.get("exploit_simulations", []),
             )
 
             report_agent = ReportAgent(on_event=async_event_handler)

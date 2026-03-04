@@ -38,6 +38,9 @@ class ReportData:
         agent_reasoning: List[str] = None,
         attack_graph: Dict = None,
         dedup_stats: Dict = None,
+        fp_filter_stats: Dict = None,
+        verification_stats: Dict = None,
+        exploit_simulations: List[Dict] = None,
     ):
         self.scan_id = scan_id
         self.target_url = target_url
@@ -51,6 +54,9 @@ class ReportData:
         self.agent_reasoning = agent_reasoning or []
         self.attack_graph = attack_graph or {}
         self.dedup_stats = dedup_stats or {}
+        self.fp_filter_stats = fp_filter_stats or {}
+        self.verification_stats = verification_stats or {}
+        self.exploit_simulations = exploit_simulations or []
         self.generated_at = datetime.utcnow()
 
         # Compute severity counts
@@ -155,6 +161,26 @@ class MarkdownReportGenerator:
                 f"",
             ])
 
+        # Verification stats callout
+        vs = data.verification_stats
+        if vs and vs.get("total", 0) > 0:
+            lines.extend([
+                f"> **Verification:** {vs.get('verified', 0)} verified, "
+                f"{vs.get('rejected', 0)} rejected out of {vs.get('total', 0)} findings.",
+                f"",
+            ])
+
+        # FP filter stats callout
+        fps = data.fp_filter_stats
+        if fps:
+            lines.extend([
+                f"> **False Positive Filter:** {fps.get('confirmed', 0)} confirmed, "
+                f"{fps.get('suspicious', 0)} suspicious, "
+                f"{fps.get('informational', 0)} informational, "
+                f"{fps.get('suppressed', 0)} suppressed.",
+                f"",
+            ])
+
         # Statistics table
         confirmed = len(data.confirmed_findings)
         unconfirmed = len(data.unconfirmed_findings)
@@ -211,6 +237,37 @@ class MarkdownReportGenerator:
             ])
             self._render_findings(lines, data.unconfirmed_findings)
 
+        # ── Exploit Simulation Scenarios ──────────────────────────────────
+        if data.exploit_simulations:
+            sim_section = 5 if data.confirmed_findings else 4
+            lines.extend([
+                f"## {sim_section}. Exploit Simulation Scenarios",
+                f"",
+                f"*The following multi-step attack scenarios were simulated based on confirmed vulnerabilities.*",
+                f"",
+            ])
+            for sim in data.exploit_simulations:
+                sev_emoji = {"CRITICAL": "🚨", "HIGH": "🔴", "MEDIUM": "🟡"}.get(sim.get("severity", ""), "⚪")
+                lines.extend([
+                    f"### {sev_emoji} {sim['name']}",
+                    f"",
+                    f"**Severity:** {sim['severity']} | **Impact:** {sim['impact']}",
+                    f"",
+                    f"**Vulnerabilities leveraged:** {', '.join(sim.get('vulnerabilities_used', []))}",
+                    f"",
+                    f"**Attack steps:**",
+                    f"",
+                ])
+                for i, step in enumerate(sim.get("steps", []), 1):
+                    lines.append(f"{i}. {step}")
+                lines.extend([
+                    f"",
+                    f"**Affected endpoints:** {', '.join(sim.get('affected_urls', [])[:3]) or 'N/A'}",
+                    f"",
+                    f"---",
+                    f"",
+                ])
+
         # ── Remediation Roadmap ───────────────────────────────────────────
         if data.findings:
             lines.extend([
@@ -247,12 +304,15 @@ class MarkdownReportGenerator:
             f"1. **Reconnaissance** — Crawled the target to discover all reachable endpoints",
             f"2. **Endpoint Intelligence** — Classified endpoints by type and risk level",
             f"3. **Strategy Planning** — Selected optimal test payloads per endpoint category",
-            f"4. **Vulnerability Testing** — Smart payload engine with multi-signal verification",
+            f"4. **Vulnerability Testing** — Smart payload engine with context-aware classification",
             f"5. **Deduplication & Filtering** — Merged duplicates, removed false positives",
-            f"6. **ML Classification** — Random Forest classifier + Isolation Forest anomaly detection",
-            f"7. **Attack Graph & Chain Analysis** — NetworkX-based multi-step attack discovery",
-            f"8. **Risk Scoring** — Composite scoring (CVSS × 0.40 + confidence × 0.25 + severity × 0.15)",
-            f"9. **Report Generation** — Compiled findings with evidence and remediation",
+            f"6. **Multi-Stage Verification** — SQLi/XSS/Redirect verification with differential analysis",
+            f"7. **False Positive Suppression** — Signal-weighted scoring (reflection, errors, diff, exploit confirmation)",
+            f"8. **ML Classification** — Random Forest classifier + Isolation Forest anomaly detection",
+            f"9. **Attack Graph & Chain Analysis** — NetworkX-based multi-step attack discovery",
+            f"10. **Risk Scoring** — Composite scoring (CVSS × 0.40 + confidence × 0.25 + severity × 0.15)",
+            f"11. **Exploit Simulation** — Multi-step attack chain narrative generation",
+            f"12. **Report Generation** — Compiled findings with evidence and remediation",
             f"",
             f"## Disclaimer",
             f"",
@@ -406,6 +466,9 @@ class JSONReportGenerator:
                     for i, f in enumerate(data.findings)
                 ],
                 "dedup_stats": data.dedup_stats,
+                "verification_stats": data.verification_stats,
+                "fp_filter_stats": data.fp_filter_stats,
+                "exploit_simulations": data.exploit_simulations,
                 "agent_reasoning": data.agent_reasoning,
                 "attack_graph": data.attack_graph,
                 "disclaimer": (
