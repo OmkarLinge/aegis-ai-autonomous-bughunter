@@ -21,6 +21,7 @@ from reports.report_generator import ReportAgent, ReportData
 from backend.analysis.attack_graph import AttackGraph
 from backend.analysis.risk_propagation import RiskPropagationEngine
 from backend.analysis.attack_chain_engine import AttackChainEngine
+from backend.analysis.risk_scoring_engine import RiskScoringEngine
 from backend.security_intelligence.cve_engine import CVEEngine
 from utils.logger import get_logger
 from utils.config import config
@@ -401,6 +402,28 @@ class ScanOrchestrator:
                     f"{chain_stats['critical']} critical, {chain_stats['high']} high"
                 ),
                 "data": chain_stats,
+            })
+
+            # ── Phase 4e: Risk Scoring ──────────────────────────────────────
+            state["current_agent"] = "RISK_SCORE"
+            risk_engine = RiskScoringEngine()
+            risk_result = risk_engine.compute(state)
+            state["risk_score"] = risk_result
+
+            logger.info(
+                "Risk scoring complete — Score: %s/100 (%s)",
+                risk_result["score"],
+                risk_result["risk_level"],
+            )
+
+            await self._broadcast(scan_id, {
+                "type": "risk_score_ready",
+                "agent": "RISK_SCORE",
+                "message": (
+                    f"Security Score: {risk_result['score']}/100 — "
+                    f"Risk Level: {risk_result['risk_level']}"
+                ),
+                "data": risk_result,
             })
 
             state["progress"] = 80

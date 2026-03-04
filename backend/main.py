@@ -19,6 +19,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.orchestrator import ScanOrchestrator
+from backend.scheduler.scan_scheduler import ScanScheduler
 from utils.config import config
 from utils.logger import get_logger
 
@@ -86,6 +87,18 @@ async def ws_broadcaster(scan_id: str, event: Dict):
     await ws_manager.broadcast(scan_id, event)
 
 orchestrator = ScanOrchestrator(websocket_broadcaster=ws_broadcaster)
+scheduler = ScanScheduler(run_scan_fn=orchestrator.start_scan)
+
+
+@app.on_event("startup")
+async def startup_event():
+    await scheduler.start()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await scheduler.stop()
+
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
 
@@ -233,6 +246,163 @@ async def get_attack_chains(scan_id: str):
     if not chains:
         return {"chains": [], "stats": {"total_chains": 0, "critical": 0, "high": 0, "medium": 0, "low": 0}}
     return chains
+
+
+@app.get("/api/scans/{scan_id}/risk-score")
+async def get_risk_score(scan_id: str):
+    """Get computed security risk score for a scan."""
+    state = orchestrator.get_scan_state(scan_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    risk = state.get("risk_score", {})
+    if not risk:
+        return {"score": 100, "risk_level": "SECURE", "breakdown": {}, "details": {}, "recommendations": []}
+    return risk
+
+
+@app.get("/api/scans/{scan_id}/knowledge-graph")
+async def get_knowledge_graph(scan_id: str):
+    """Get security knowledge graph data (endpoints, vulns, CVEs, impacts, mitigations)."""
+    state = orchestrator.get_scan_state(scan_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    kg_nodes = []
+    kg_edges = []
+    node_ids = set()
+
+    # Endpoints
+    for ep in state.get("endpoints", []):
+        nid = f"ep_{ep.get('path', ep.get('url', ''))}"
+        if nid not in node_ids:
+            node_ids.add(nid)
+            kg_nodes.append({
+                "id": nid, "label": ep.get("path", ep.get("url", "")),
+                "type": "endpoint", "category": ep.get("endpoint_type", "unknown"),
+                "risk": ep.get("risk_score", 0.3),
+            })
+
+    # Vulnerabilities + CVE + Impact + Mitigation
+    for i, vuln in enumerate(state.get("vulnerabilities", [])):
+        vid = f"vuln_{i}"
+        if vid not in node_ids:
+            node_ids.add(vid)
+            kg_nodes.append({
+                "id": vid, "label": vuln.get("title", vuln.get("vuln_type", "")),
+                "type": "vulnerability", "severity": vuln.get("severity", "MEDIUM"),
+                "confidence": vuln.get("confidence", 0.5),
+            })
+
+        # Link endpoint -> vuln
+        vuln_url = vuln.get("url", "")
+        for ep in state.get("endpoints", []):
+            if ep.get("path", "") in vuln_url:
+                ep_id = f"ep_{ep['path']}"
+                if ep_id in node_ids:
+                    kg_edges.append({"from": ep_id, "to": vid, "label": "has vulnerability", "type": "vuln_link"})
+                break
+
+        # CVE intel
+        cve_intel = vuln.get("cve_intel", {})
+        if cve_intel and cve_intel.get("enriched"):
+            for cve in cve_intel.get("cve_examples", []):
+                cve_id = cve["id"]
+                cve_nid = f"cve_{cve_id}"
+                if cve_nid not in node_ids:
+                    node_ids.add(cve_nid)
+                    kg_nodes.append({
+                        "id": cve_nid, "label": cve_id,
+                        "type": "cve", "product": cve.get("product", ""),
+                        "description": cve.get("description", ""),
+                        "cvss_score": cve_intel.get("cvss_score", 0),
+                    })
+                kg_edges.append({"from": vid, "to": cve_nid, "label": "maps to", "type": "cve_link"})
+
+            # Impact node from CVE intel
+            impact_text = cve_intel.get("impact", "")
+            if impact_text:
+                imp_id = f"impact_{vuln.get('vuln_type', i)}"
+                if imp_id not in node_ids:
+                    node_ids.add(imp_id)
+                    kg_nodes.append({
+                        "id": imp_id, "label": impact_text[:60],
+                        "type": "impact", "full_text": impact_text,
+                    })
+                for cve in cve_intel.get("cve_examples", []):
+                    kg_edges.append({"from": f"cve_{cve['id']}", "to": imp_id, "label": "causes", "type": "impact_link"})
+
+            # Mitigation node
+            mit_text = cve_intel.get("mitigation", "")
+            if mit_text:
+                mit_id = f"mit_{vuln.get('vuln_type', i)}"
+                if mit_id not in node_ids:
+                    node_ids.add(mit_id)
+                    kg_nodes.append({
+                        "id": mit_id, "label": mit_text[:60],
+                        "type": "mitigation", "full_text": mit_text,
+                    })
+                for cve in cve_intel.get("cve_examples", []):
+                    kg_edges.append({"from": f"cve_{cve['id']}", "to": mit_id, "label": "mitigated by", "type": "mitigation_link"})
+
+    return {"nodes": kg_nodes, "edges": kg_edges, "node_count": len(kg_nodes), "edge_count": len(kg_edges)}
+
+
+# ── Scheduler Endpoints ───────────────────────────────────────────────────
+
+class ScheduleRequest(BaseModel):
+    target_url: str
+    frequency: str = "daily"
+    scan_types: List[str] = ["sql_injection", "xss", "open_redirect", "security_headers"]
+    scan_depth: int = 3
+    target_name: Optional[str] = None
+    custom_interval_hours: Optional[float] = None
+
+    @validator("target_url")
+    def validate_url(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError("target_url is required")
+        if not v.startswith(("http://", "https://")):
+            v = "http://" + v
+        return v
+
+
+@app.get("/api/schedules")
+async def list_schedules():
+    """List all scheduled scans."""
+    return {"schedules": scheduler.get_all_schedules()}
+
+
+@app.post("/api/schedules")
+async def create_schedule(request: ScheduleRequest):
+    """Create a new scheduled scan."""
+    sched = scheduler.add_schedule(
+        target_url=request.target_url,
+        frequency=request.frequency,
+        scan_types=request.scan_types,
+        scan_depth=request.scan_depth,
+        target_name=request.target_name,
+        custom_interval_hours=request.custom_interval_hours,
+    )
+    return {"message": "Schedule created", "schedule": scheduler._serialize(sched)}
+
+
+@app.delete("/api/schedules/{schedule_id}")
+async def delete_schedule(schedule_id: str):
+    """Delete a scheduled scan."""
+    removed = scheduler.remove_schedule(schedule_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return {"message": f"Schedule {schedule_id} deleted"}
+
+
+@app.patch("/api/schedules/{schedule_id}/toggle")
+async def toggle_schedule(schedule_id: str):
+    """Enable or disable a scheduled scan."""
+    result = scheduler.toggle_schedule(schedule_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return {"enabled": result}
 
 
 @app.get("/api/scans/{scan_id}/report/{format}")
