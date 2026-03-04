@@ -223,6 +223,18 @@ async def get_attack_graph(scan_id: str):
     return graph
 
 
+@app.get("/api/scans/{scan_id}/attack-chains")
+async def get_attack_chains(scan_id: str):
+    """Get discovered multi-step attack chains."""
+    state = orchestrator.get_scan_state(scan_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    chains = state.get("attack_chains", {})
+    if not chains:
+        return {"chains": [], "stats": {"total_chains": 0, "critical": 0, "high": 0, "medium": 0, "low": 0}}
+    return chains
+
+
 @app.get("/api/scans/{scan_id}/report/{format}")
 async def download_report(scan_id: str, format: str):
     """Download a generated report (pdf, json, markdown)."""
