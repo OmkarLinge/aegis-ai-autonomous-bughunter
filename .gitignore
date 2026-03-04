@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+*.egg
+
+# ML Models (trained, auto-generated)
+ml_models/trained/
+
+# Database
+database/*.db
+database/*.sqlite
+
+# Logs
+logs/
+
+# Reports output
+reports/output/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+.npm/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
