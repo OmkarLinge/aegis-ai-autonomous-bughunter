@@ -20,6 +20,20 @@ logger = get_logger(__name__, "EXPLOIT")
 
 
 @dataclass
+class ResponseAnalysis:
+    """Detailed response analysis for a single test (Step 5)."""
+    status_code_changed: bool = False
+    content_length_delta: int = 0
+    header_changed: bool = False
+    payload_reflected: bool = False
+    response_time_delta_ms: float = 0.0
+    error_pattern_detected: bool = False
+    redirect_detected: bool = False
+    new_headers: List[str] = field(default_factory=list)
+    removed_headers: List[str] = field(default_factory=list)
+
+
+@dataclass
 class TestResult:
     """Result of a single vulnerability test."""
     url: str
@@ -33,6 +47,77 @@ class TestResult:
     confidence: float = 0.0
     evidence: str = ""
     anomaly_score: float = 0.0
+    verified: bool = False                          # Step 2: confirmed by verification
+    response_analysis: Optional[ResponseAnalysis] = None  # Step 5: detailed analysis
+    request_evidence: str = ""                      # Step 8: full request for proof
+    response_evidence: str = ""                     # Step 8: full response for proof
+
+
+def _analyse_response_diff(
+    baseline: Optional[HttpResponse],
+    test: HttpResponse,
+    payload: str,
+) -> ResponseAnalysis:
+    """Compare baseline vs test response and extract analysis features (Step 5)."""
+    analysis = ResponseAnalysis()
+
+    if baseline:
+        analysis.status_code_changed = baseline.status_code != test.status_code
+        analysis.content_length_delta = len(test.body) - len(baseline.body)
+        analysis.response_time_delta_ms = test.response_time_ms - baseline.response_time_ms
+
+        baseline_keys = set(k.lower() for k in baseline.headers)
+        test_keys = set(k.lower() for k in test.headers)
+        analysis.new_headers = sorted(test_keys - baseline_keys)
+        analysis.removed_headers = sorted(baseline_keys - test_keys)
+        analysis.header_changed = bool(analysis.new_headers or analysis.removed_headers)
+
+    analysis.payload_reflected = payload in test.body
+    analysis.redirect_detected = test.status_code in (301, 302, 303, 307, 308)
+
+    return analysis
+
+
+def _build_confidence(
+    payload_reflected: bool = False,
+    status_changed: bool = False,
+    headers_changed: bool = False,
+    exploit_confirmed: bool = False,
+    error_pattern: bool = False,
+    size_anomaly: bool = False,
+    time_anomaly: bool = False,
+) -> float:
+    """Multi-signal confidence scoring (Step 3)."""
+    score = 0.0
+    if payload_reflected:
+        score += 0.25
+    if status_changed:
+        score += 0.15
+    if headers_changed:
+        score += 0.10
+    if exploit_confirmed:
+        score += 0.30
+    if error_pattern:
+        score += 0.15
+    if size_anomaly:
+        score += 0.10
+    if time_anomaly:
+        score += 0.10
+    return min(round(score, 2), 1.0)
+
+
+def _build_evidence_strings(
+    url: str, method: str, param: str, payload: str,
+    test: HttpResponse,
+) -> Tuple[str, str]:
+    """Build request/response evidence for proof (Step 8)."""
+    req = f"{method} {url}?{param}={payload} HTTP/1.1"
+    resp_lines = [f"HTTP/1.1 {test.status_code}"]
+    for k, v in list(test.headers.items())[:10]:
+        resp_lines.append(f"{k}: {v}")
+    resp_lines.append("")
+    resp_lines.append(test.body[:300])
+    return req, "\n".join(resp_lines)
 
 
 class SQLiTester:
@@ -69,18 +154,32 @@ class SQLiTester:
         results = []
         baseline = await engine.get_baseline(url)
 
-        for payload in PAYLOADS["sql_injection"][:5]:  # Test top 5 payloads
-            # Inject into URL parameter
+        for payload in PAYLOADS["sql_injection"][:5]:
             test_url = self._inject_url_param(url, parameter, payload)
             response = await engine.get(test_url)
 
             if response.error:
                 continue
 
-            # Check for SQL errors in response
-            is_vuln, confidence, evidence = self._analyze_response(
-                baseline, response, payload
+            # Analyse response diff (Step 5)
+            analysis = _analyse_response_diff(baseline, response, payload)
+
+            # Verify (Step 2) — require actual SQL error proof
+            is_vuln, verified, evidence = self._verify(baseline, response, payload, analysis)
+
+            # Multi-signal confidence (Step 3)
+            confidence = _build_confidence(
+                payload_reflected=analysis.payload_reflected,
+                status_changed=analysis.status_code_changed,
+                headers_changed=analysis.header_changed,
+                exploit_confirmed=verified,
+                error_pattern=analysis.error_pattern_detected,
+                size_anomaly=abs(analysis.content_length_delta) > 500,
+                time_anomaly=analysis.response_time_delta_ms > 2000,
             )
+
+            # Evidence strings (Step 8)
+            req_ev, resp_ev = _build_evidence_strings(url, "GET", parameter, payload, response)
 
             result = TestResult(
                 url=url,
@@ -93,49 +192,59 @@ class SQLiTester:
                 is_vulnerable=is_vuln,
                 confidence=confidence,
                 evidence=evidence,
+                verified=verified,
+                response_analysis=analysis,
+                request_evidence=req_ev,
+                response_evidence=resp_ev,
             )
             results.append(result)
 
             if is_vuln and confidence > 0.7:
-                break  # Stop testing if high confidence found
+                break
 
         return results
 
     def _inject_url_param(self, url: str, param: str, payload: str) -> str:
-        """Inject payload into a URL parameter."""
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
         params[param] = [payload]
         new_query = urlencode({k: v[0] for k, v in params.items()})
         return parsed._replace(query=new_query).geturl()
 
-    def _analyze_response(
+    def _verify(
         self,
-        baseline: HttpResponse,
+        baseline: Optional[HttpResponse],
         test: HttpResponse,
         payload: str,
-    ) -> Tuple[bool, float, str]:
-        """Analyze response for SQL injection indicators."""
-        body_lower = test.body.lower()
+        analysis: ResponseAnalysis,
+    ) -> Tuple[bool, bool, str]:
+        """Step 2: Verify SQL injection with concrete proof."""
+        body = test.body
 
-        # Check for SQL error patterns
+        # 1) Strong proof: known SQL error regex
         for pattern in self.ERROR_PATTERNS:
-            if re.search(pattern, test.body, re.IGNORECASE):
-                return True, 0.90, f"SQL error pattern detected: {pattern}"
+            if re.search(pattern, body, re.IGNORECASE):
+                analysis.error_pattern_detected = True
+                return True, True, f"SQL error pattern confirmed: {pattern}"
 
-        # Check for significant response size change (boolean-based)
-        if baseline:
-            size_ratio = len(test.body) / max(len(baseline.body), 1)
-            if size_ratio > 2.0 or size_ratio < 0.5:
-                return True, 0.60, f"Significant response size change (ratio: {size_ratio:.2f})"
-
-        # Generic database error keywords
-        generic_errors = ["database error", "sql error", "syntax error", "query failed"]
-        for err in generic_errors:
+        # 2) Generic DB error keywords
+        body_lower = body.lower()
+        for err in ("database error", "sql error", "syntax error", "query failed"):
             if err in body_lower:
-                return True, 0.70, f"Database error keyword found: {err}"
+                analysis.error_pattern_detected = True
+                return True, True, f"Database error keyword confirmed: {err}"
 
-        return False, 0.0, ""
+        # 3) Boolean-based: significant body-size change (suspicious, not confirmed)
+        if baseline:
+            size_ratio = len(body) / max(len(baseline.body), 1)
+            if size_ratio > 2.0 or size_ratio < 0.5:
+                return True, False, f"Response size anomaly (ratio: {size_ratio:.2f}) — unconfirmed"
+
+        # 4) Time-based blind: unusually slow response
+        if analysis.response_time_delta_ms > 4000:
+            return True, False, f"Time-based anomaly ({analysis.response_time_delta_ms:.0f}ms delta) — possible blind SQLi"
+
+        return False, False, ""
 
 
 class XSSTester:
@@ -158,9 +267,19 @@ class XSSTester:
             if response.error:
                 continue
 
-            is_vuln, confidence, evidence = self._analyze_response(
-                response, payload
+            analysis = _analyse_response_diff(baseline, response, payload)
+            is_vuln, verified, evidence = self._verify(response, payload, analysis)
+
+            confidence = _build_confidence(
+                payload_reflected=analysis.payload_reflected,
+                status_changed=analysis.status_code_changed,
+                headers_changed=analysis.header_changed,
+                exploit_confirmed=verified,
+                error_pattern=False,
+                size_anomaly=abs(analysis.content_length_delta) > 200,
             )
+
+            req_ev, resp_ev = _build_evidence_strings(url, "GET", parameter, payload, response)
 
             results.append(TestResult(
                 url=url,
@@ -173,6 +292,10 @@ class XSSTester:
                 is_vulnerable=is_vuln,
                 confidence=confidence,
                 evidence=evidence,
+                verified=verified,
+                response_analysis=analysis,
+                request_evidence=req_ev,
+                response_evidence=resp_ev,
             ))
 
             if is_vuln and confidence > 0.8:
@@ -181,30 +304,43 @@ class XSSTester:
         return results
 
     def _inject_url_param(self, url: str, param: str, payload: str) -> str:
-        from urllib.parse import quote
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
         params[param] = [payload]
         new_query = urlencode({k: v[0] for k, v in params.items()})
         return parsed._replace(query=new_query).geturl()
 
-    def _analyze_response(
-        self, response: HttpResponse, payload: str
-    ) -> Tuple[bool, float, str]:
-        """Check if XSS payload is reflected in response."""
-        # Check for unescaped reflection of payload
+    def _verify(
+        self, response: HttpResponse, payload: str, analysis: ResponseAnalysis,
+    ) -> Tuple[bool, bool, str]:
+        """Step 2: Verify XSS with concrete proof."""
+        body_lower = response.body.lower()
+
+        # Check CSP header — if present, XSS is mitigated even if reflected
+        csp = response.headers.get("content-security-policy", "")
+        has_csp = bool(csp)
+
+        # 1) Full payload reflected unencoded
         if payload in response.body:
-            return True, 0.85, f"Payload reflected unencoded in response"
+            if has_csp:
+                return True, False, "Payload reflected but CSP may mitigate execution"
+            return True, True, "Payload reflected unencoded in response — confirmed XSS"
 
-        # Check for partial reflection (tag may be intact)
-        if "<script>" in response.body.lower() and "alert" in response.body.lower():
-            return True, 0.75, "Script tag with alert found in response"
+        # 2) Script tag + alert() present
+        if "<script>" in body_lower and "alert" in body_lower:
+            return True, True, "Script tag with alert() found in response"
 
-        # Check for event handler injection
-        if "onerror=" in response.body.lower() or "onload=" in response.body.lower():
-            return True, 0.65, "Event handler injected into response"
+        # 3) Event handler injection
+        for handler in ("onerror=", "onload=", "onmouseover=", "onfocus="):
+            if handler in body_lower:
+                return True, True, f"Event handler ({handler}) injected into response"
 
-        return False, 0.0, ""
+        # 4) Partial reflection (encoded) — suspicious but not confirmed
+        import html as html_mod
+        if html_mod.escape(payload) in response.body:
+            return True, False, "Payload reflected HTML-encoded — browser may not execute"
+
+        return False, False, ""
 
 
 class OpenRedirectTester:
@@ -222,6 +358,7 @@ class OpenRedirectTester:
         """Test for open redirect vulnerabilities."""
         results = []
         baseline = await engine.get_baseline(url)
+        target_domain = urlparse(url).netloc
 
         for param in self.REDIRECT_PARAMS:
             for payload in PAYLOADS["open_redirect"][:2]:
@@ -231,11 +368,23 @@ class OpenRedirectTester:
                 if response.error:
                     continue
 
-                is_vuln, confidence, evidence = self._analyze_response(
-                    response, payload
+                analysis = _analyse_response_diff(baseline, response, payload)
+                is_vuln, verified, evidence = self._verify(
+                    response, payload, target_domain, analysis
                 )
 
                 if is_vuln:
+                    confidence = _build_confidence(
+                        payload_reflected=analysis.payload_reflected,
+                        status_changed=analysis.status_code_changed,
+                        headers_changed=analysis.header_changed,
+                        exploit_confirmed=verified,
+                    )
+
+                    req_ev, resp_ev = _build_evidence_strings(
+                        url, "GET", param, payload, response
+                    )
+
                     results.append(TestResult(
                         url=url,
                         vuln_type="open_redirect",
@@ -247,6 +396,10 @@ class OpenRedirectTester:
                         is_vulnerable=True,
                         confidence=confidence,
                         evidence=evidence,
+                        verified=verified,
+                        response_analysis=analysis,
+                        request_evidence=req_ev,
+                        response_evidence=resp_ev,
                     ))
 
         return results
@@ -258,15 +411,44 @@ class OpenRedirectTester:
         new_query = urlencode({k: v[0] for k, v in params.items()})
         return parsed._replace(query=new_query).geturl()
 
-    def _analyze_response(
-        self, response: HttpResponse, payload: str
-    ) -> Tuple[bool, float, str]:
-        """Check if redirect points to injected URL."""
-        if response.status_code in (301, 302, 303, 307, 308):
-            location = response.headers.get("location", "")
-            if "evil.com" in location or payload in location:
-                return True, 0.95, f"Redirect to: {location}"
-        return False, 0.0, ""
+    def _verify(
+        self,
+        response: HttpResponse,
+        payload: str,
+        target_domain: str,
+        analysis: ResponseAnalysis,
+    ) -> Tuple[bool, bool, str]:
+        """
+        Step 2: Verify open redirect properly.
+        Correct behaviour:
+          1. Check response status is 3xx
+          2. Read Location header
+          3. Confirm it redirects OUTSIDE the target domain
+        """
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return False, False, ""
+
+        location = response.headers.get("location", "")
+        if not location:
+            return False, False, ""
+
+        # Parse the Location header to check domain
+        loc_parsed = urlparse(location)
+        loc_domain = loc_parsed.netloc
+
+        # Confirm redirect goes outside the target domain
+        if loc_domain and loc_domain != target_domain:
+            evidence = (
+                f"Confirmed: {response.status_code} redirect to external domain\n"
+                f"Location: {location}"
+            )
+            return True, True, evidence
+
+        # Payload present in Location but same domain (relative)
+        if payload in location:
+            return True, False, f"Payload in Location header but same-domain: {location}"
+
+        return False, False, ""
 
 
 class SecurityHeaderChecker:
@@ -324,10 +506,17 @@ class SecurityHeaderChecker:
 class SSTITester:
     """Tests for Server-Side Template Injection (SSTI)."""
 
+    # Multiple expression tests for stronger verification
+    EXPRESSION_CHECKS = [
+        ("{{7*7}}",  "49",   "7*7=49"),
+        ("{{7*'7'}}", "7777777", "7*'7'=7777777 (Jinja2)"),
+        ("${7*7}",   "49",   "${7*7}=49 (Mako/Freemarker)"),
+    ]
+
     async def test(
         self, url: str, parameter: str, engine: RequestEngine
     ) -> List[TestResult]:
-        """Test for SSTI vulnerabilities."""
+        """Test for SSTI vulnerabilities with proper verification."""
         results = []
         baseline = await engine.get_baseline(url)
 
@@ -338,8 +527,34 @@ class SSTITester:
             if response.error:
                 continue
 
-            # Check if math expression was evaluated
-            if "49" in response.body and "{{7*7}}" not in response.body:
+            analysis = _analyse_response_diff(baseline, response, payload)
+
+            # Verify: check multiple known expression outputs
+            verified = False
+            evidence = ""
+            for expr, expected, desc in self.EXPRESSION_CHECKS:
+                if expected in response.body and expr not in response.body:
+                    verified = True
+                    evidence = f"Template expression evaluated: {desc}"
+                    break
+
+            if not verified:
+                # Fallback: generic "49" check
+                if "49" in response.body and "{{7*7}}" not in response.body:
+                    verified = True
+                    evidence = "Template expression evaluated: 7*7=49"
+
+            if verified:
+                confidence = _build_confidence(
+                    payload_reflected=False,
+                    status_changed=analysis.status_code_changed,
+                    exploit_confirmed=True,
+                    headers_changed=analysis.header_changed,
+                )
+                req_ev, resp_ev = _build_evidence_strings(
+                    url, "GET", parameter, payload, response
+                )
+
                 results.append(TestResult(
                     url=url,
                     vuln_type="ssti",
@@ -349,8 +564,12 @@ class SSTITester:
                     baseline_response=baseline,
                     test_response=response,
                     is_vulnerable=True,
-                    confidence=0.80,
-                    evidence="Template expression evaluated: 7*7=49",
+                    confidence=confidence,
+                    evidence=evidence,
+                    verified=True,
+                    response_analysis=analysis,
+                    request_evidence=req_ev,
+                    response_evidence=resp_ev,
                 ))
                 break
 
