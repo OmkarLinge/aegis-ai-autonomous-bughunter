@@ -22,6 +22,7 @@ from backend.analysis.attack_graph import AttackGraph
 from backend.analysis.risk_propagation import RiskPropagationEngine
 from backend.analysis.attack_chain_engine import AttackChainEngine
 from backend.analysis.risk_scoring_engine import RiskScoringEngine
+from backend.analysis.deduplication_engine import DeduplicationEngine
 from backend.security_intelligence.cve_engine import CVEEngine
 from utils.logger import get_logger
 from utils.config import config
@@ -258,13 +259,54 @@ class ScanOrchestrator:
                 authorized=authorized,
                 on_event=async_event_handler,
             )
-            findings: List[VulnerabilityFinding] = await exploit_agent.run_all(
+            raw_findings: List[VulnerabilityFinding] = await exploit_agent.run_all(
                 strategy.target_endpoints
             )
 
             # Adapt strategy based on findings
-            if findings:
-                remaining = strategy_agent.adapt_strategy(findings, classified)
+            if raw_findings:
+                remaining = strategy_agent.adapt_strategy(raw_findings, classified)
+
+            # ── Phase 4a: Deduplication & False-Positive Filtering ──────────
+            state["current_agent"] = "DEDUP"
+            await self._broadcast(scan_id, {
+                "type": "agent_event",
+                "agent": "DEDUP",
+                "event_type": "DEDUP_START",
+                "message": f"Deduplicating {len(raw_findings)} raw findings…",
+            })
+
+            dedup_engine = DeduplicationEngine()
+            dedup_vulns = dedup_engine.process(
+                [self._finding_to_dict(f) for f in raw_findings],
+                attack_chains=[],  # chains not yet discovered at this point
+            )
+            dedup_stats = dedup_engine.get_stats()
+
+            # Rebuild VulnerabilityFinding list from deduplicated results
+            findings = self._rebuild_findings(dedup_vulns, raw_findings)
+
+            state["raw_vulnerability_count"] = len(raw_findings)
+            state["dedup_stats"] = dedup_stats
+
+            logger.info(
+                "[ORCHESTRATOR] Dedup: %d raw → %d unique (%d false positives removed, %.0f%% reduction)",
+                dedup_stats["raw_count"],
+                dedup_stats["deduplicated_count"],
+                dedup_stats["false_positives_removed"],
+                dedup_stats["reduction_pct"],
+            )
+
+            await self._broadcast(scan_id, {
+                "type": "dedup_complete",
+                "agent": "DEDUP",
+                "message": (
+                    f"Deduplicated: {dedup_stats['raw_count']} → "
+                    f"{dedup_stats['deduplicated_count']} unique findings "
+                    f"({dedup_stats['reduction_pct']:.0f}% reduction)"
+                ),
+                "data": dedup_stats,
+            })
 
             # Build final attack graph with vulnerabilities (legacy)
             final_graph = strategy_agent.build_attack_graph(classified, findings)
@@ -343,6 +385,9 @@ class ScanOrchestrator:
                     "ml_prediction": f.ml_prediction,
                     "ml_confidence": f.ml_confidence,
                     "anomaly_score": f.anomaly_score,
+                    "verified": getattr(f, "verified", False),
+                    "request_evidence": getattr(f, "request_evidence", ""),
+                    "response_evidence": getattr(f, "response_evidence", ""),
                 }
                 for i, f in enumerate(findings)
             ]
@@ -456,6 +501,7 @@ class ScanOrchestrator:
                 scan_duration_seconds=duration,
                 agent_reasoning=state["reasoning"],
                 attack_graph=final_graph,
+                dedup_stats=dedup_stats,
             )
 
             report_agent = ReportAgent(on_event=async_event_handler)
@@ -544,6 +590,55 @@ class ScanOrchestrator:
             }
             for s in self._active_scans.values()
         ]
+
+    # ── Helpers for dedup integration ────────────────────────────────────
+
+    @staticmethod
+    def _finding_to_dict(f: VulnerabilityFinding) -> Dict:
+        """Convert a VulnerabilityFinding to dict for the dedup engine."""
+        return {
+            "vuln_type": f.vuln_type,
+            "url": f.url,
+            "parameter": f.parameter,
+            "payload": f.payload,
+            "severity": f.severity,
+            "confidence": f.confidence,
+            "evidence": f.evidence,
+            "verified": getattr(f, "verified", False),
+            "request_evidence": getattr(f, "request_evidence", ""),
+            "response_evidence": getattr(f, "response_evidence", ""),
+            "title": f.title,
+            "description": f.description,
+            "impact": f.impact,
+            "remediation": f.remediation,
+            "cwe_id": f.cwe_id,
+            "ml_prediction": f.ml_prediction,
+            "ml_confidence": f.ml_confidence,
+            "anomaly_score": f.anomaly_score,
+            "http_method": f.http_method,
+            "status_code": f.status_code,
+            "response_time_ms": f.response_time_ms,
+        }
+
+    @staticmethod
+    def _rebuild_findings(
+        dedup_vulns: list, raw_findings: List[VulnerabilityFinding]
+    ) -> List[VulnerabilityFinding]:
+        """Pick the best raw finding for each deduplicated vulnerability."""
+        rebuilt: List[VulnerabilityFinding] = []
+        for dv in dedup_vulns:
+            # find the raw finding with the highest confidence that matches
+            best = None
+            for f in raw_findings:
+                if (
+                    f.vuln_type == dv.vuln_type
+                    and f.url.rstrip("/").split("?")[0] == dv.endpoint_url.rstrip("/").split("?")[0]
+                ):
+                    if best is None or f.confidence > best.confidence:
+                        best = f
+            if best:
+                rebuilt.append(best)
+        return rebuilt
 
     def _handle_agent_event(self, scan_id: str, event: Dict):
         """Handle agent events synchronously (used in non-async contexts)."""
