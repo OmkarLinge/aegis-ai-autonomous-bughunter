@@ -95,7 +95,11 @@ class ScanScheduler:
         if freq == "custom" and custom_interval_hours:
             interval = int(custom_interval_hours * 3600)
         else:
-            interval = FREQUENCY_SECONDS.get(freq, FREQUENCY_SECONDS[ScheduleFrequency.DAILY])
+            try:
+                freq_enum = ScheduleFrequency(freq)
+            except ValueError:
+                freq_enum = ScheduleFrequency.DAILY
+            interval = FREQUENCY_SECONDS.get(freq_enum, FREQUENCY_SECONDS[ScheduleFrequency.DAILY])
 
         now = datetime.utcnow()
         next_run = now + timedelta(seconds=interval)
