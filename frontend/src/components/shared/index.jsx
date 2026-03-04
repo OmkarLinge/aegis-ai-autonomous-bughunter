@@ -197,6 +197,16 @@ export function VulnRow({ vuln, expanded, onToggle }) {
           <div className="text-xs text-aegis-muted font-mono truncate">{vuln.url}</div>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
+          {vuln.cve_intel?.enriched && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+              vuln.cve_intel.cvss_score >= 9 ? 'bg-red-600/60 text-red-200' :
+              vuln.cve_intel.cvss_score >= 7 ? 'bg-orange-600/60 text-orange-200' :
+              vuln.cve_intel.cvss_score >= 4 ? 'bg-yellow-600/60 text-yellow-200' :
+              'bg-blue-600/60 text-blue-200'
+            }`}>
+              CVSS {vuln.cve_intel.cvss_score.toFixed(1)}
+            </span>
+          )}
           {vuln.cwe_id && (
             <span className="text-xs font-mono text-aegis-muted">{vuln.cwe_id}</span>
           )}
@@ -243,6 +253,76 @@ export function VulnRow({ vuln, expanded, onToggle }) {
               <p className="text-sm text-aegis-muted">{vuln.remediation}</p>
             </div>
           </div>
+
+          {/* ── CVE Intelligence ─────────────────────────────────── */}
+          {vuln.cve_intel?.enriched && (
+            <div className="p-4 bg-indigo-950/30 border border-indigo-800/30 rounded-lg space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs uppercase tracking-wider text-indigo-400 font-semibold">
+                  CVE Intelligence
+                </h4>
+                <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                  vuln.cve_intel.cvss_score >= 9 ? 'bg-red-600/80 text-white' :
+                  vuln.cve_intel.cvss_score >= 7 ? 'bg-orange-600/80 text-white' :
+                  vuln.cve_intel.cvss_score >= 4 ? 'bg-yellow-600/80 text-white' :
+                  'bg-blue-600/80 text-white'
+                }`}>
+                  CVSS {vuln.cve_intel.cvss_score.toFixed(1)} — {vuln.cve_intel.severity_label}
+                </span>
+              </div>
+
+              {vuln.cve_intel.cve_examples?.length > 0 && (
+                <div>
+                  <span className="text-xs text-indigo-300/70 uppercase tracking-wider">Related CVEs</span>
+                  <div className="mt-1 space-y-1">
+                    {vuln.cve_intel.cve_examples.map((cve, idx) => (
+                      <div key={idx} className="flex items-start gap-2 text-xs">
+                        <a
+                          href={`https://nvd.nist.gov/vuln/detail/${cve.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-mono text-indigo-400 hover:text-indigo-300 underline underline-offset-2 flex-shrink-0"
+                        >
+                          {cve.id}
+                        </a>
+                        <span className="text-aegis-muted">
+                          {cve.product && <strong className="text-indigo-300/80">{cve.product}</strong>}
+                          {cve.product && ' — '}{cve.description}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <span className="text-indigo-300/70 uppercase tracking-wider">CVE Impact</span>
+                  <p className="text-aegis-muted mt-0.5">{vuln.cve_intel.impact}</p>
+                </div>
+                <div>
+                  <span className="text-indigo-300/70 uppercase tracking-wider">Mitigation</span>
+                  <p className="text-aegis-muted mt-0.5">{vuln.cve_intel.mitigation}</p>
+                </div>
+              </div>
+
+              {vuln.cve_intel.references?.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {vuln.cve_intel.references.map((ref, idx) => (
+                    <a
+                      key={idx}
+                      href={ref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] font-mono text-indigo-400/70 hover:text-indigo-300 underline underline-offset-2 break-all"
+                    >
+                      {ref.replace('https://', '')}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {vuln.evidence && (
             <div className="p-3 bg-amber-950/30 border border-amber-800/30 rounded-lg">

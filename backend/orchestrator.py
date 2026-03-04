@@ -20,6 +20,7 @@ from agents.strategy_agent import StrategyAgent
 from reports.report_generator import ReportAgent, ReportData
 from backend.analysis.attack_graph import AttackGraph
 from backend.analysis.risk_propagation import RiskPropagationEngine
+from backend.security_intelligence.cve_engine import CVEEngine
 from utils.logger import get_logger
 from utils.config import config
 
@@ -343,6 +344,27 @@ class ScanOrchestrator:
                 }
                 for i, f in enumerate(findings)
             ]
+
+            # ── Phase 4c: CVE Intelligence Enrichment ───────────────────────
+            cve_engine = CVEEngine()
+            cve_engine.enrich_scan_results(state["vulnerabilities"])
+            cve_stats = cve_engine.get_stats()
+            logger.info(
+                "CVE enrichment complete — %d matched, %d unmatched",
+                cve_stats["matched"],
+                cve_stats["unmatched"],
+            )
+
+            await self._broadcast(scan_id, {
+                "type": "cve_enrichment_complete",
+                "agent": "CVE_INTEL",
+                "message": (
+                    f"CVE intelligence: {cve_stats['matched']} vulnerabilities "
+                    f"mapped to known CVEs"
+                ),
+                "data": cve_stats,
+            })
+
             state["progress"] = 80
 
             severity_counts = {
