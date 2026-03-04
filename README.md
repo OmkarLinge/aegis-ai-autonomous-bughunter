@@ -1,273 +1,270 @@
 # 🛡️ Aegis AI — Autonomous Bug Hunter
 
-> **Agentic AI system that autonomously explores web applications, detects vulnerabilities, and generates professional security reports.**
+**Aegis AI** is an autonomous multi-agent security system designed to discover vulnerabilities in web applications and generate professional security reports.
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green)
-![React](https://img.shields.io/badge/React-18-cyan)
-![License](https://img.shields.io/badge/License-MIT-purple)
+The system combines **AI agents, machine learning models, attack graph analysis, and real-time monitoring** to simulate the workflow of a security researcher.
 
----
-
-## ⚠️ IMPORTANT DISCLAIMER
-
-> **This tool is for EDUCATIONAL purposes and AUTHORIZED penetration testing ONLY.**
->
-> You must only scan systems you **own** or have **explicit written permission** to test.
-> Unauthorized scanning is **illegal** under computer fraud and abuse laws worldwide.
-> The authors assume no liability for misuse.
+Instead of running static scanners, Aegis coordinates specialized agents that **explore applications, reason about endpoints, test vulnerabilities, and analyze attack paths**.
 
 ---
 
-## 🏗️ Architecture
+# ⚠️ Ethical Notice
+
+This project is built strictly for:
+
+• **Educational purposes**
+• **Security research**
+• **Authorized penetration testing**
+
+Users must only scan systems they **own or have explicit permission to test**.
+
+Unauthorized scanning may violate cybersecurity laws.
+
+---
+
+# 🌍 The Problem This Project Addresses
+
+Modern web applications are complex and constantly evolving.
+Security teams face several challenges:
+
+• Large attack surfaces across APIs and microservices
+• Increasing number of vulnerabilities and misconfigurations
+• Traditional scanners producing large numbers of false positives
+• Difficulty understanding **how vulnerabilities combine into real attack paths**
+
+Most existing tools simply list vulnerabilities without providing **context or reasoning**.
+
+This makes it difficult for developers and security teams to prioritize risks.
+
+---
+
+# 💡 Why Aegis AI Was Built
+
+Aegis AI was created to explore a different approach:
+
+**What if vulnerability scanning behaved more like a human security researcher?**
+
+Instead of static checks, Aegis introduces:
+
+• **Autonomous agents** that specialize in reconnaissance and testing
+• **Machine learning models** that classify responses and anomalies
+• **Attack graph intelligence** that explains how vulnerabilities chain together
+• **Risk propagation analysis** to estimate real security impact
+
+The goal is to build a **research-grade prototype of an autonomous security analyst.**
+
+---
+
+# 🧠 Core Concepts Behind the System
+
+The project explores several advanced engineering ideas:
+
+### Multi-Agent Systems
+
+Different agents perform specialized tasks:
+
+| Agent                 | Role                                               |
+| --------------------- | -------------------------------------------------- |
+| Recon Agent           | Discovers application endpoints and attack surface |
+| Endpoint Intelligence | Classifies endpoints and prioritizes risk          |
+| Strategy Agent        | Decides which vulnerabilities to test              |
+| Exploit Agent         | Executes vulnerability tests                       |
+| Report Agent          | Generates professional security reports            |
+
+---
+
+### Machine Learning
+
+Aegis uses ML models to interpret HTTP responses:
+
+| Model            | Purpose                             |
+| ---------------- | ----------------------------------- |
+| Random Forest    | Classifies vulnerability likelihood |
+| Isolation Forest | Detects anomalous responses         |
+
+These models allow the system to detect **unusual behavior patterns** that may indicate vulnerabilities.
+
+---
+
+### Attack Graph Intelligence
+
+Instead of listing isolated vulnerabilities, Aegis builds an **attack graph** that maps how an attacker could move through the system.
+
+Example attack chain:
+
+Attacker → Login Endpoint → SQL Injection → Database Access
+
+This provides **context about the true impact of vulnerabilities**.
+
+---
+
+# 🏗️ System Architecture
 
 ```
-User → React Dashboard → FastAPI Backend → AI Orchestrator
-                                                │
-                         ┌──────────────────────┼────────────────────────┐
-                         │                      │                        │
-                    Recon Agent          Endpoint Intel         Strategy Agent
-                    (Crawler)            (NLP Classify)         (AI Reasoning)
-                         │                      │                        │
-                         └──────────────────────┼────────────────────────┘
-                                                │
-                                         Exploit Agent
-                                    (SQLi/XSS/Headers/SSTI)
-                                                │
-                                      ML Vulnerability Classifier
-                                      (Random Forest + Isolation Forest)
-                                                │
-                                         Report Agent
-                                    (PDF / JSON / Markdown)
-                                                │
-                                       Dashboard + WebSocket
+User → Web Dashboard → FastAPI Backend → AI Orchestrator
+                                           │
+                     ┌─────────────────────┼─────────────────────┐
+                     │                     │                     │
+                Recon Agent         Endpoint Intelligence   Strategy Agent
+                (Crawler)           (Classification)        (Decision Engine)
+                     │                     │                     │
+                     └─────────────────────┼─────────────────────┘
+                                           │
+                                     Exploit Agent
+                                 (SQLi / XSS / SSTI)
+                                           │
+                                ML Vulnerability Analysis
+                           (Random Forest + Isolation Forest)
+                                           │
+                                  Attack Graph Generator
+                                           │
+                                     Report Engine
 ```
 
 ---
 
-## 🤖 Agent System
-
-| Agent | Purpose | Techniques |
-|-------|---------|------------|
-| **Recon Agent** | Discover attack surface | Web crawling, common path probing, tech detection |
-| **Endpoint Intelligence** | Classify endpoints | NLP pattern matching, risk scoring |
-| **Strategy Agent** | Plan scan order | Rule-based reasoning, priority queuing |
-| **Exploit Agent** | Test vulnerabilities | SQLi, XSS, Redirect, SSTI, Headers |
-| **ML Classifier** | Predict severity | Random Forest, feature extraction |
-| **Anomaly Detector** | Detect blind vulns | Isolation Forest, time-delay analysis |
-| **Report Agent** | Generate reports | ReportLab PDF, JSON, Markdown |
-
----
-
-## 📁 Project Structure
+# 📁 Project Structure
 
 ```
-aegis-ai-bughunter/
-├── backend/
-│   ├── main.py              # FastAPI server + WebSocket
-│   └── orchestrator.py      # Scan lifecycle manager
-├── agents/
-│   ├── recon_agent.py       # Reconnaissance
-│   ├── endpoint_intelligence_agent.py
-│   ├── exploit_agent.py     # Vulnerability testing
-│   └── strategy_agent.py    # AI scanning brain
-├── scanner/
-│   ├── crawler.py           # Web crawler (BFS)
-│   ├── request_engine.py    # HTTP layer with rate limiting
-│   └── payload_engine.py    # Exploit payload injectors
-├── ml_models/
-│   ├── vulnerability_classifier.py  # Random Forest
-│   └── anomaly_detector.py          # Isolation Forest
-├── reports/
-│   └── report_generator.py  # PDF/JSON/MD reports
-├── database/
-│   └── models.py            # SQLAlchemy ORM
-├── utils/
-│   ├── config.py            # Global configuration
-│   └── logger.py            # Structured logging
-├── frontend/                # React + Vite + TailwindCSS
-│   └── src/
-│       ├── pages/
-│       │   ├── Dashboard.jsx
-│       │   ├── NewScan.jsx
-│       │   ├── LiveScan.jsx
-│       │   ├── Vulnerabilities.jsx
-│       │   └── Reports.jsx
-│       └── components/
-├── run.py                   # Unified launcher
-├── demo_scan.py             # CLI demo scanner
-└── README.md
+aegis-ai-autonomous-bughunter
+│
+├── backend/       FastAPI server and orchestration logic
+├── agents/        Autonomous security agents
+├── scanner/       Crawling and request execution engine
+├── ml_models/     Machine learning classifiers
+├── database/      Data models and storage
+├── reports/       Security report generation
+├── frontend/      React dashboard interface
+├── utils/         Logging and configuration
+│
+├── run.py         Unified launcher
+└── demo_scan.py   CLI demonstration
 ```
 
 ---
 
-## 🚀 Installation & Setup
+# 🚀 Running the System
 
-### Prerequisites
-- Python 3.10+
-- Node.js 18+
+### 1️⃣ Install dependencies
 
-### 1. Clone / Extract
+Backend:
 
-```bash
-unzip aegis-ai-bughunter.zip
-cd aegis-ai-bughunter
 ```
-
-### 2. Backend Setup
-
-```bash
-# Create virtual environment (recommended)
 python -m venv venv
-source venv/bin/activate    # Linux/Mac
-# OR
-venv\Scripts\activate       # Windows
-
-# Install Python dependencies
+source venv/bin/activate
 pip install -r backend/requirements.txt
 ```
 
-### 3. Frontend Setup
+Frontend:
 
-```bash
+```
 cd frontend
 npm install
-cd ..
 ```
 
 ---
 
-## ▶️ Running the System
+### 2️⃣ Start the backend
 
-### Option A: Full Stack (Recommended)
-
-**Terminal 1 — Backend:**
-```bash
+```
 python run.py
-# Server starts at http://localhost:8000
-# API docs at http://localhost:8000/api/docs
 ```
 
-**Terminal 2 — Frontend:**
-```bash
+Backend runs at:
+
+```
+http://localhost:8000
+```
+
+---
+
+### 3️⃣ Start the frontend
+
+```
 cd frontend
 npm run dev
-# Dashboard at http://localhost:5173
 ```
 
-Open **http://localhost:5173** in your browser.
+Dashboard:
 
-### Option B: CLI Demo (No UI)
-
-```bash
-python demo_scan.py https://your-authorized-target.com
+```
+http://localhost:5173
 ```
 
 ---
 
-## 🖥️ Dashboard Pages
+# 🔬 Example Workflow
 
-| Page | URL | Description |
-|------|-----|-------------|
-| Dashboard | `/` | Overview stats, recent scans, charts |
-| New Scan | `/scan/new` | Configure and launch a scan |
-| Live Monitor | `/live/:id` | Real-time agent activity feed |
-| Vulnerabilities | `/vulnerabilities` | Sortable/filterable finding list |
-| Reports | `/reports` | Download PDF/JSON/Markdown reports |
-
----
-
-## 🔬 Example Scan Workflow
-
-1. Open the dashboard at `http://localhost:5173`
-2. Click **New Scan**
-3. Enter your authorized target URL (e.g., `https://your-lab.example.com`)
-4. Select vulnerability test types
-5. Check the authorization confirmation
-6. Click **Launch Aegis Scan**
-7. Watch the **Live Monitor** for real-time agent activity
-8. View findings in **Vulnerabilities**
-9. Download your report from **Reports**
+1. Open the dashboard
+2. Start a new scan
+3. The Recon Agent maps the target application
+4. The Strategy Agent prioritizes vulnerability tests
+5. The Exploit Agent executes payload testing
+6. ML models analyze responses
+7. The attack graph visualizes vulnerability chains
+8. A professional security report is generated
 
 ---
 
-## 🧠 AI Techniques Used
+# 🔐 Security Tests Implemented
 
-| Domain | Technique | Location |
-|--------|-----------|----------|
-| Machine Learning | Random Forest Classifier | `ml_models/vulnerability_classifier.py` |
-| Anomaly Detection | Isolation Forest | `ml_models/anomaly_detector.py` |
-| NLP Classification | Regex + pattern matching | `agents/endpoint_intelligence_agent.py` |
-| Agentic Reasoning | Rule-based decision engine | `agents/strategy_agent.py` |
-| Multi-Agent Coordination | Async orchestration | `backend/orchestrator.py` |
-| Feature Engineering | HTTP response features | `ml_models/vulnerability_classifier.py` |
-
----
-
-## 🔒 Security Tests Included
-
-- **SQL Injection** — Error-based, boolean-based detection
-- **Cross-Site Scripting (XSS)** — Reflected XSS detection
-- **Open Redirect** — URL redirect parameter testing
-- **Security Header Misconfiguration** — CSP, HSTS, X-Frame-Options, etc.
-- **Server-Side Template Injection (SSTI)** — Template expression evaluation
-- **Server Version Disclosure** — Header-based version exposure
-- **Technology Fingerprinting** — CMS, framework, server detection
+• SQL Injection detection
+• Cross-Site Scripting (XSS)
+• Open Redirect vulnerabilities
+• Security header misconfigurations
+• Server-Side Template Injection (SSTI)
+• Server version disclosure
+• Technology fingerprinting
 
 ---
 
-## ⚙️ Configuration
+# 🧪 Technologies Used
 
-Edit `utils/config.py` to customize:
+Backend
 
-```python
-ScanConfig(
-    max_depth=3,              # Crawl depth (1-5)
-    max_endpoints=200,        # Max endpoints per scan
-    request_timeout=10,       # HTTP timeout (seconds)
-    delay_between_requests=0.5  # Rate limiting
-)
-```
+• Python
+• FastAPI
+• asyncio
+• SQLAlchemy
 
----
+Machine Learning
 
-## 📊 API Reference
+• scikit-learn
+• Random Forest
+• Isolation Forest
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/scans` | Start a new scan |
-| `GET` | `/api/scans` | List all scans |
-| `GET` | `/api/scans/{id}` | Get scan state |
-| `GET` | `/api/scans/{id}/vulnerabilities` | Get findings |
-| `GET` | `/api/scans/{id}/logs` | Get agent logs |
-| `GET` | `/api/scans/{id}/attack-graph` | Get graph data |
-| `GET` | `/api/scans/{id}/report/{format}` | Download report |
-| `DELETE` | `/api/scans/{id}` | Cancel a scan |
-| `WS` | `/ws/{id}` | Live scan events |
+Frontend
 
-Full interactive docs: `http://localhost:8000/api/docs`
+• React
+• Vite
+• TailwindCSS
+
+Security Analysis
+
+• NetworkX attack graph modeling
+• BFS risk propagation
+• structured logging
 
 ---
 
-## 🏆 FAANG-Level Features
+# 🎯 Research & Learning Goals
 
-- ✅ **Multi-Agent Architecture** — Specialized agents with clear responsibilities
-- ✅ **Machine Learning** — Real Random Forest + Isolation Forest models
-- ✅ **WebSocket Real-Time** — Live agent event streaming
-- ✅ **Async Python** — Full asyncio/FastAPI backend
-- ✅ **Professional Reports** — PDF with ReportLab, JSON, Markdown
-- ✅ **Attack Graph** — Visual vulnerability chain visualization
-- ✅ **AI Reasoning Logs** — Transparent agent decision display
-- ✅ **Rate Limiting** — Responsible scanning with configurable delays
-- ✅ **Technology Detection** — 20+ tech signatures detected
-- ✅ **Clean Architecture** — Modular, testable, documented code
+This project explores several engineering domains:
 
----
+• Autonomous agent systems
+• Security automation
+• Machine learning for anomaly detection
+• Attack graph analysis
+• full-stack AI system design
 
-## 📄 License
-
-MIT License — see `LICENSE` file.
+It serves as a **research prototype for autonomous vulnerability discovery systems.**
 
 ---
 
-*Built with ❤️ for the security community. Stay ethical.*
+# 📄 License
+
+MIT License.
+
+---
+
+*Built as an exploration of autonomous security analysis systems.*
