@@ -20,6 +20,7 @@ from agents.strategy_agent import StrategyAgent
 from reports.report_generator import ReportAgent, ReportData
 from backend.analysis.attack_graph import AttackGraph
 from backend.analysis.risk_propagation import RiskPropagationEngine
+from backend.analysis.attack_chain_engine import AttackChainEngine
 from backend.security_intelligence.cve_engine import CVEEngine
 from utils.logger import get_logger
 from utils.config import config
@@ -363,6 +364,43 @@ class ScanOrchestrator:
                     f"mapped to known CVEs"
                 ),
                 "data": cve_stats,
+            })
+
+            # ── Phase 4d: Attack Chain Discovery ────────────────────────────
+            state["current_agent"] = "ATTACK_CHAIN"
+            await self._broadcast(scan_id, {
+                "type": "agent_event",
+                "agent": "ATTACK_CHAIN",
+                "event_type": "DISCOVERY_START",
+                "message": "Discovering autonomous multi-step attack chains…",
+            })
+
+            # Build CVE intel lookup for the chain engine
+            from backend.security_intelligence.cve_database import CVE_DATABASE
+            chain_engine = AttackChainEngine(
+                graph=attack_graph_engine.graph,
+                cve_intel=CVE_DATABASE,
+            )
+            attack_chains = chain_engine.discover_attack_chains()
+            chain_data = chain_engine.to_dict()
+            chain_stats = chain_engine.get_stats()
+            state["attack_chains"] = chain_data
+
+            logger.info(
+                "Attack chain discovery complete — %d chains (%d critical, %d high)",
+                chain_stats["total_chains"],
+                chain_stats["critical"],
+                chain_stats["high"],
+            )
+
+            await self._broadcast(scan_id, {
+                "type": "attack_chains_ready",
+                "agent": "ATTACK_CHAIN",
+                "message": (
+                    f"Discovered {chain_stats['total_chains']} attack chains — "
+                    f"{chain_stats['critical']} critical, {chain_stats['high']} high"
+                ),
+                "data": chain_stats,
             })
 
             state["progress"] = 80
