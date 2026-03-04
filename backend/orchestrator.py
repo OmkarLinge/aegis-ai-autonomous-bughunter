@@ -17,6 +17,7 @@ from agents.recon_agent import ReconAgent, ReconResult
 from agents.endpoint_intelligence_agent import EndpointIntelligenceAgent, ClassifiedEndpoint
 from agents.exploit_agent import ExploitAgent, VulnerabilityFinding
 from agents.strategy_agent import StrategyAgent
+from agents.reasoning_agent import ReasoningAgent
 from reports.report_generator import ReportAgent, ReportData
 from backend.analysis.attack_graph import AttackGraph
 from backend.analysis.risk_propagation import RiskPropagationEngine
@@ -195,6 +196,13 @@ class ScanOrchestrator:
             ]
             state["technologies"] = recon_result.technologies
             state["reasoning"].extend(recon_result.agent_reasoning)
+
+            # Store site graph and attack surface data
+            if recon_result.site_graph:
+                state["site_graph"] = recon_result.site_graph.to_dict()
+            if recon_result.attack_surface:
+                state["attack_surface"] = recon_result.attack_surface.to_dict()
+
             state["progress"] = 30
 
             await self._broadcast(scan_id, {
@@ -251,6 +259,46 @@ class ScanOrchestrator:
                     "test_count": len(strategy.test_sequence),
                     "reasoning": strategy_agent.reasoning_log[-3:],
                 },
+            })
+
+            # ── Phase 3b: AI Reasoning Agent ────────────────────────────────
+            state["current_agent"] = "REASONING"
+            state["progress"] = 55
+
+            await self._broadcast(scan_id, {
+                "type": "agent_event",
+                "agent": "REASONING",
+                "event_type": "REASONING_START",
+                "message": "AI Reasoning Agent analyzing attack surface and deciding test strategy…",
+            })
+
+            reasoning_agent = ReasoningAgent(on_event=async_event_handler)
+            reasoning_report = await reasoning_agent.analyze(
+                classified_endpoints=classified,
+                attack_surface=recon_result.attack_surface,
+                technologies=recon_result.technologies,
+                baseline_headers=getattr(recon_result, "baseline_headers", {}),
+            )
+
+            state["reasoning"].extend(reasoning_report.reasoning_log)
+            state["reasoning_report"] = {
+                "waf_detected": reasoning_report.waf_detected,
+                "waf_type": reasoning_report.waf_type,
+                "tech_stack": reasoning_report.tech_stack,
+                "high_value_targets": reasoning_report.high_value_targets,
+                "endpoints_to_test": reasoning_report.endpoints_to_test,
+                "endpoints_skipped": reasoning_report.endpoints_skipped,
+            }
+
+            await self._broadcast(scan_id, {
+                "type": "reasoning_complete",
+                "agent": "REASONING",
+                "message": (
+                    f"AI Reasoning: {reasoning_report.endpoints_to_test} endpoints selected, "
+                    f"{reasoning_report.endpoints_skipped} skipped"
+                    + (f" | WAF: {reasoning_report.waf_type}" if reasoning_report.waf_detected else "")
+                ),
+                "data": state["reasoning_report"],
             })
 
             # ── Phase 4: Exploit Testing ────────────────────────────────────

@@ -1,10 +1,11 @@
 """
 Aegis AI — Reconnaissance Agent
 Discovers the full attack surface of the target application.
-Combines web crawling, common path discovery, and technology detection.
+Combines web crawling, common path discovery, technology detection,
+site-graph construction, and attack surface mapping.
 """
 import asyncio
-from typing import List, Dict, Optional, Callable
+from typing import Any, List, Dict, Optional, Callable
 from dataclasses import dataclass, field
 
 import sys
@@ -12,6 +13,9 @@ sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
 
 from scanner.crawler import Crawler, CommonPathDiscovery, DiscoveredEndpoint
 from scanner.request_engine import RequestEngine
+from scanner.site_graph import (
+    SiteGraph, AttackSurface, RobotsSitemapParser, TechFingerprinter,
+)
 from utils.logger import get_logger, log_agent_event
 
 logger = get_logger(__name__, "RECON")
@@ -28,6 +32,9 @@ class ReconResult:
     common_paths_found: int = 0
     scan_duration_ms: float = 0.0
     agent_reasoning: List[str] = field(default_factory=list)
+    site_graph: Optional[Any] = None             # SiteGraph instance
+    attack_surface: Optional[Any] = None         # AttackSurface instance
+    baseline_headers: Dict[str, str] = field(default_factory=dict)
 
 
 class ReconAgent:
@@ -76,6 +83,47 @@ class ReconAgent:
 
         await self._emit("START", f"Recon Agent initialized for {self.target_url}")
 
+        # Build SiteGraph for this scan
+        site_graph = SiteGraph(self.target_url)
+
+        # ── Phase 0: Robots.txt & Sitemap Discovery ─────────────────────
+        await self._emit("ROBOTS_START", "Parsing robots.txt and sitemap.xml...")
+        result.agent_reasoning.append("Phase 0: Parsing robots.txt and sitemap.xml for extra URLs")
+
+        robots_parser = RobotsSitemapParser(self.target_url)
+        robots_data = await robots_parser.parse_robots(self.engine)
+        extra_urls: List[str] = []
+
+        for path in robots_data.get("disallowed", []):
+            if path and not path.startswith("*"):
+                from urllib.parse import urljoin
+                extra_urls.append(urljoin(self.target_url, path))
+
+        for sitemap_url in robots_data.get("sitemaps", []):
+            sitemap_urls = await robots_parser.parse_sitemap(self.engine, sitemap_url)
+            extra_urls.extend(sitemap_urls)
+
+        # Also try default sitemap.xml
+        if not robots_data.get("sitemaps"):
+            sitemap_urls = await robots_parser.parse_sitemap(self.engine)
+            extra_urls.extend(sitemap_urls)
+
+        result.agent_reasoning.append(
+            f"Robots/sitemap discovery yielded {len(extra_urls)} additonal URLs"
+        )
+
+        # ── Phase 0b: Baseline request for WAF / tech fingerprint ───────
+        baseline_resp = await self.engine.get(self.target_url)
+        if baseline_resp and not baseline_resp.error:
+            result.baseline_headers = dict(baseline_resp.headers)
+            # Enhanced tech fingerprinting from headers + body
+            fp_techs = TechFingerprinter.fingerprint(
+                headers=baseline_resp.headers,
+                body=baseline_resp.body,
+            )
+            for tech in fp_techs:
+                site_graph.add_technology(tech)
+
         # ── Phase 1: Initial Crawl ──────────────────────────────────────────
         await self._emit("CRAWL_START", "Beginning web crawl...")
         result.agent_reasoning.append("Phase 1: Crawling website to discover linked pages")
@@ -91,6 +139,25 @@ class ReconAgent:
         result.endpoints.extend(crawl_result.endpoints)
         result.technologies = crawl_result.technologies
 
+        # Populate SiteGraph from crawl results
+        for ep in crawl_result.endpoints:
+            site_graph.add_endpoint(
+                url=ep.url,
+                path=ep.path,
+                method=ep.method,
+                status_code=ep.status_code,
+                content_type=ep.content_type,
+                depth=ep.depth,
+                parameters=ep.parameters,
+                forms=ep.forms,
+                technologies=ep.technologies,
+            )
+            # Build edges from parent → child (links discovered on the page)
+            for link_url in getattr(ep, "links", []):
+                from urllib.parse import urlparse
+                link_path = urlparse(link_url).path or "/"
+                site_graph.add_link(ep.path, link_path, link_type="navigation")
+
         await self._emit(
             "CRAWL_COMPLETE",
             f"Crawl found {len(crawl_result.endpoints)} endpoints",
@@ -100,6 +167,40 @@ class ReconAgent:
             f"Crawl completed: {len(crawl_result.endpoints)} endpoints, "
             f"technologies: {', '.join(crawl_result.technologies) or 'none detected'}"
         )
+
+        # ── Phase 1b: Queue robots/sitemap URLs into crawl ──────────────
+        crawled_paths = {e.path for e in result.endpoints}
+        robots_added = 0
+        for url in extra_urls:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            if parsed.path and parsed.path not in crawled_paths:
+                resp = await self.engine.get(url, allow_redirects=False)
+                if resp and resp.status_code not in (0, 404):
+                    ep = DiscoveredEndpoint(
+                        url=url,
+                        path=parsed.path,
+                        method="GET",
+                        status_code=resp.status_code,
+                        response_time_ms=resp.response_time_ms,
+                        content_type=resp.content_type,
+                        depth=0,
+                    )
+                    result.endpoints.append(ep)
+                    site_graph.add_endpoint(
+                        url=url, path=parsed.path,
+                        status_code=resp.status_code,
+                        content_type=resp.content_type,
+                    )
+                    crawled_paths.add(parsed.path)
+                    robots_added += 1
+                    if robots_added >= 30:
+                        break
+
+        if robots_added > 0:
+            result.agent_reasoning.append(
+                f"Robots/sitemap discovery added {robots_added} new endpoints"
+            )
 
         # ── Phase 2: Common Path Discovery ─────────────────────────────────
         await self._emit("PROBE_START", "Probing common paths and admin panels...")
@@ -113,18 +214,35 @@ class ReconAgent:
         )
 
         # Deduplicate against crawled endpoints
-        crawled_paths = {e.path for e in result.endpoints}
         new_common = [e for e in common_endpoints if e.path not in crawled_paths]
         result.endpoints.extend(new_common)
         result.common_paths_found = len(new_common)
+
+        # Add to SiteGraph
+        for ep in new_common:
+            site_graph.add_endpoint(
+                url=ep.url, path=ep.path,
+                method=ep.method,
+                status_code=ep.status_code,
+                content_type=ep.content_type,
+            )
 
         await self._emit(
             "PROBE_COMPLETE",
             f"Common path discovery found {len(new_common)} additional endpoints",
         )
 
-        # ── Phase 3: Analyze Endpoints ──────────────────────────────────────
-        result.agent_reasoning.append("Phase 3: Analyzing discovered endpoints")
+        # ── Phase 3: Build Attack Surface Map ──────────────────────────────
+        result.agent_reasoning.append("Phase 3: Building attack surface map from site graph")
+
+        attack_surface = site_graph.build_attack_surface()
+        result.site_graph = site_graph
+        result.attack_surface = attack_surface
+
+        # Merge SiteGraph technologies into result
+        for tech in site_graph.technologies:
+            if tech not in result.technologies:
+                result.technologies.append(tech)
 
         # Count interesting findings
         for ep in result.endpoints:
@@ -138,6 +256,11 @@ class ReconAgent:
             f"(auth={sum(1 for e in high_value if e.endpoint_type == 'authentication')}, "
             f"upload={sum(1 for e in high_value if e.endpoint_type == 'file_upload')}, "
             f"admin={sum(1 for e in high_value if e.endpoint_type == 'admin_panel')})"
+        )
+
+        result.agent_reasoning.append(
+            f"Site graph: {site_graph.node_count} nodes, {site_graph.edge_count} edges | "
+            f"Attack surface: {attack_surface.total_params} params, {attack_surface.total_forms} forms"
         )
 
         result.scan_duration_ms = (time.monotonic() - start) * 1000

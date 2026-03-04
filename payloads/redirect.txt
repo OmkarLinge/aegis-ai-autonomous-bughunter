@@ -1,0 +1,58 @@
+# ──────────────────────────────────────────────────────────────────
+# Aegis AI — Open Redirect Payloads
+# Lines starting with # are comments. Blank lines are ignored.
+# ──────────────────────────────────────────────────────────────────
+
+# ── Direct external URLs ────────────────────────────────────────
+https://evil.com
+http://evil.com
+https://evil.com/
+//evil.com
+///evil.com
+////evil.com
+
+# ── Protocol-relative ───────────────────────────────────────────
+//evil.com
+//evil.com/
+//evil.com/%2f..
+\\evil.com
+
+# ── Domain confusion ────────────────────────────────────────────
+https://evil.com@legitimate.com
+https://legitimate.com@evil.com
+https://evil.com%23@legitimate.com
+https://evil.com%40legitimate.com
+
+# ── Unicode / encoding tricks ────────────────────────────────────
+//evil%E3%80%82com
+//evil。com
+//evil%2ecom
+/\evil.com
+\/evil.com
+
+# ── Path-based ───────────────────────────────────────────────────
+/redirect?url=https://evil.com
+/https://evil.com
+/http://evil.com
+/.evil.com
+/evil.com
+/%0d%0aLocation:%20https://evil.com
+
+# ── Data URI ─────────────────────────────────────────────────────
+data:text/html,<script>alert(1)</script>
+data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==
+
+# ── Fragment / query tricks ──────────────────────────────────────
+https://evil.com#
+https://evil.com?
+?next=https://evil.com
+?url=//evil.com
+?redirect=//evil.com
+
+# ── Null byte injection ─────────────────────────────────────────
+https://evil.com%00.legitimate.com
+//evil.com%00.legitimate.com
+
+# ── Subdomain tricks ────────────────────────────────────────────
+https://legitimate.com.evil.com
+https://evil.com/legitimate.com

