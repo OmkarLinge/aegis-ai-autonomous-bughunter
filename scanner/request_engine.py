@@ -22,6 +22,7 @@ import sys
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
 from utils.config import config
 from utils.logger import get_logger
+from backend.stealth.adaptive_scanner import AdaptiveScanner
 
 logger = get_logger(__name__, "RECON")
 
@@ -97,6 +98,15 @@ class RequestEngine:
         self.request_count = 0
         self._baseline_response: Optional[HttpResponse] = None
 
+        # ── Stealth subsystem ──────────────────────────────────────────
+        self.stealth = AdaptiveScanner(
+            base_delay=config.scan.delay_between_requests,
+            max_requests_per_second=config.scan.max_requests_per_second,
+            jitter_enabled=config.scan.jitter,
+            adaptive_throttle=config.scan.adaptive_throttle,
+            max_concurrency=config.scan.max_concurrent_requests,
+        )
+
     def _default_headers(self) -> Dict[str, str]:
         return {
             "User-Agent": config.scan.user_agent,
@@ -160,9 +170,15 @@ class RequestEngine:
                 response_time_ms=0, error="Out of scope"
             )
 
+        # ── Stealth: throttle + jitter before every request ────────
+        await self.stealth.before_request()
         await self.rate_limiter.acquire()
 
         merged_headers = {**self._default_headers(), **self._auth_headers, **(headers or {})}
+
+        # Apply rotated User-Agent if WAF evasion is active
+        if self.stealth.active_user_agent:
+            merged_headers["User-Agent"] = self.stealth.active_user_agent
         if self.session_cookies:
             merged_headers["Cookie"] = "; ".join(
                 f"{k}={v}" for k, v in self.session_cookies.items()
@@ -194,7 +210,7 @@ class RequestEngine:
                         for k, v in resp.cookies.items():
                             self.session_cookies[k] = v
 
-                        return HttpResponse(
+                        response = HttpResponse(
                             url=str(resp.url),
                             status_code=resp.status_code,
                             headers=dict(resp.headers),
@@ -202,6 +218,15 @@ class RequestEngine:
                             response_time_ms=elapsed,
                             redirect_chain=[str(r.url) for r in resp.history],
                         )
+
+                        # ── Stealth: monitor response for WAF signals ──
+                        self.stealth.after_response(
+                            resp.status_code,
+                            dict(resp.headers),
+                            resp.text[:10000],
+                        )
+
+                        return response
                 else:
                     # Fallback to stdlib urllib for sync operation
                     return await self._urllib_request(

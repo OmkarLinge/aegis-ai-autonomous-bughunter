@@ -23,6 +23,10 @@ class ScanConfig:
         "AegisAI/1.0 (Authorized Security Scanner; "
         "https://github.com/aegis-ai; contact@aegis-ai.sec)"
     )
+    # Stealth & adaptive rate limiting
+    max_requests_per_second: float = 3.0
+    jitter: bool = True
+    adaptive_throttle: bool = True
 
 
 @dataclass
