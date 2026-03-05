@@ -71,6 +71,7 @@ class ScanOrchestrator:
         scan_types: List[str] = None,
         authorized: bool = False,
         target_name: str = None,
+        auth_config: Optional[Dict] = None,
     ) -> str:
         """
         Start a new scan job.
@@ -81,6 +82,7 @@ class ScanOrchestrator:
             scan_types: List of test types to run
             authorized: User confirms authorization
             target_name: Optional friendly name for the target
+            auth_config: Optional auth credentials dict
 
         Returns:
             scan_id: Unique identifier for this scan job
@@ -122,7 +124,7 @@ class ScanOrchestrator:
 
         # Start scan as background task
         task = asyncio.create_task(
-            self._run_scan(scan_id, target_url, scan_depth, scan_types, authorized)
+            self._run_scan(scan_id, target_url, scan_depth, scan_types, authorized, auth_config)
         )
         self._scan_tasks[scan_id] = task
 
@@ -135,6 +137,7 @@ class ScanOrchestrator:
         scan_depth: int,
         scan_types: List[str],
         authorized: bool,
+        auth_config: Optional[Dict] = None,
     ):
         """Execute the full scan pipeline."""
         scan_start = time.monotonic()
@@ -175,8 +178,14 @@ class ScanOrchestrator:
                 authorized=authorized,
                 max_depth=scan_depth,
                 on_event=async_event_handler,
+                auth_config=auth_config,
             )
             recon_result: ReconResult = await recon_agent.run()
+
+            # Store auth info in scan state
+            if recon_result.authenticated:
+                state["authenticated"] = True
+                state["auth_session"] = recon_result.auth_session
 
             state["endpoints"] = [
                 {

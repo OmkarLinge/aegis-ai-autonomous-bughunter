@@ -162,6 +162,7 @@ class LoginAutomation:
         session = AuthSession(auth_type="form", login_url=cred.login_url)
 
         pw = await _async_playwright().start()  # type: ignore[misc]
+        browser = None
         try:
             browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
             context = await browser.new_context(
@@ -312,7 +313,8 @@ class LoginAutomation:
 
         finally:
             try:
-                await browser.close()
+                if browser:
+                    await browser.close()
             except Exception:
                 pass
             try:

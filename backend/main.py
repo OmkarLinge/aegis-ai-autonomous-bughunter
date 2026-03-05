@@ -109,6 +109,16 @@ class StartScanRequest(BaseModel):
     authorized: bool = False
     target_name: Optional[str] = None
 
+    # ── Authenticated scanning fields ───────────────────────────────────
+    auth_type: Optional[str] = None            # "form" | "jwt" | "cookie" | None
+    login_url: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    username_field: Optional[str] = None
+    password_field: Optional[str] = None
+    jwt_token: Optional[str] = None
+    session_cookie: Optional[str] = None       # "name=value; name2=value2"
+
     @validator("scan_depth")
     def validate_depth(cls, v):
         if not 1 <= v <= 5:
@@ -159,12 +169,27 @@ async def start_scan(request: StartScanRequest):
         )
 
     try:
+        # Build auth_config dict if auth fields provided
+        auth_config = None
+        if request.auth_type:
+            auth_config = {
+                "auth_type": request.auth_type,
+                "login_url": request.login_url or "",
+                "username": request.username or "",
+                "password": request.password or "",
+                "username_field": request.username_field or "username",
+                "password_field": request.password_field or "password",
+                "jwt_token": request.jwt_token or "",
+                "session_cookie": request.session_cookie or "",
+            }
+
         scan_id = await orchestrator.start_scan(
             target_url=request.target_url,
             scan_depth=request.scan_depth,
             scan_types=request.scan_types,
             authorized=request.authorized,
             target_name=request.target_name,
+            auth_config=auth_config,
         )
         return ScanResponse(
             scan_id=scan_id,

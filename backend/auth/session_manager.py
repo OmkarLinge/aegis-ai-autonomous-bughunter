@@ -218,7 +218,7 @@ class SessionManager:
 
     # ── Event helper ────────────────────────────────────────────────────
 
-    async def _emit(self, event_type: str, message: str, details: dict = None):
+    async def _emit(self, event_type: str, message: str, details: Optional[dict] = None):
         if self._on_event:
             await self._on_event({
                 "agent": "AUTH",
