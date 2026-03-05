@@ -203,6 +203,26 @@ class ScanOrchestrator:
             if recon_result.attack_surface:
                 state["attack_surface"] = recon_result.attack_surface.to_dict()
 
+            # Store browser recon results
+            if recon_result.browser_recon_enabled:
+                state["browser_recon"] = {
+                    "enabled": True,
+                    "pages_crawled": recon_result.browser_pages_crawled,
+                    "dom_analysis": recon_result.dom_analysis,
+                    "js_endpoints": (
+                        {
+                            "count": len(recon_result.js_endpoints.endpoints),
+                            "graphql_detected": recon_result.js_endpoints.graphql_detected,
+                            "endpoints": [
+                                {"url": ep.url, "method": ep.method, "source": ep.source, "confidence": ep.confidence}
+                                for ep in recon_result.js_endpoints.endpoints[:50]
+                            ],
+                        }
+                        if recon_result.js_endpoints else None
+                    ),
+                    "browser_technologies": recon_result.browser_technologies,
+                }
+
             state["progress"] = 30
 
             await self._broadcast(scan_id, {

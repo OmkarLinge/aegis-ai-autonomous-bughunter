@@ -18,6 +18,21 @@ from scanner.site_graph import (
 )
 from utils.logger import get_logger, log_agent_event
 
+# ── Browser engine (graceful if Playwright missing) ──────────────────────
+try:
+    from backend.browser.browser_crawler import (
+        BrowserCrawler, BrowserCrawlResult, PLAYWRIGHT_AVAILABLE,
+    )
+    from backend.browser.dom_analyzer import DOMAnalyzer, DOMAnalysisResult
+    from backend.browser.js_endpoint_extractor import (
+        JSEndpointExtractor, JSExtractionResult,
+    )
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+
+# SPA framework indicators (used to decide if browser recon is needed)
+SPA_INDICATORS = {"react", "angular", "vue", "next.js", "nuxt", "svelte", "gatsby", "remix"}
+
 logger = get_logger(__name__, "RECON")
 
 
@@ -35,6 +50,12 @@ class ReconResult:
     site_graph: Optional[Any] = None             # SiteGraph instance
     attack_surface: Optional[Any] = None         # AttackSurface instance
     baseline_headers: Dict[str, str] = field(default_factory=dict)
+    # ── Browser recon results ────────────────────────────────────────
+    browser_recon_enabled: bool = False
+    browser_pages_crawled: int = 0
+    dom_analysis: Optional[Any] = None           # DOMAnalysisResult summary
+    js_endpoints: Optional[Any] = None           # JSExtractionResult
+    browser_technologies: List[str] = field(default_factory=list)
 
 
 class ReconAgent:
@@ -200,6 +221,154 @@ class ReconAgent:
         if robots_added > 0:
             result.agent_reasoning.append(
                 f"Robots/sitemap discovery added {robots_added} new endpoints"
+            )
+
+        # ── Phase 1c: Browser Recon (SPA-aware headless crawl) ──────────
+        spa_detected = any(
+            tech.lower() in SPA_INDICATORS
+            for tech in site_graph.technologies
+        )
+        # Also trigger for pages with heavy JS (>3 external scripts)
+        has_heavy_js = False
+        if baseline_resp and not baseline_resp.error:
+            script_count = baseline_resp.body.lower().count("<script")
+            has_heavy_js = script_count > 3
+
+        should_browser_crawl = (
+            PLAYWRIGHT_AVAILABLE and (spa_detected or has_heavy_js)
+        )
+
+        if should_browser_crawl:
+            await self._emit(
+                "BROWSER_RECON_START",
+                "SPA detected — launching headless browser crawl...",
+                {"spa_detected": spa_detected, "heavy_js": has_heavy_js},
+            )
+            result.agent_reasoning.append(
+                "Phase 1c: SPA/heavy-JS detected — running headless browser crawl"
+            )
+            result.browser_recon_enabled = True
+
+            try:
+                browser_crawler = BrowserCrawler(
+                    target_url=self.target_url,
+                    max_pages=min(self.max_depth * 8, 20),
+                    on_event=self.on_event,
+                )
+                async with browser_crawler:
+                    browser_results = await browser_crawler.crawl()
+
+                result.browser_pages_crawled = len(browser_results)
+
+                # Merge browser-discovered links/endpoints into SiteGraph
+                browser_new_endpoints = 0
+                all_js_sources: List[str] = []
+                all_api_calls: List[Any] = []
+
+                for br in browser_results:
+                    # Collect JS for endpoint extraction
+                    all_js_sources.extend(br.js_scripts)
+                    all_api_calls.extend(br.api_calls)
+
+                    # Merge new links
+                    for link in br.links:
+                        parsed = urlparse(link)
+                        path = parsed.path or "/"
+                        if path not in crawled_paths:
+                            site_graph.add_endpoint(
+                                url=link, path=path,
+                                method="GET",
+                                content_type="text/html",
+                            )
+                            crawled_paths.add(path)
+                            browser_new_endpoints += 1
+
+                    # Merge forms
+                    for form in br.forms:
+                        parent_path = urlparse(br.url).path or "/"
+                        action_path = urlparse(form.action).path if form.action else parent_path
+                        site_graph.add_endpoint(
+                            url=form.action or br.url,
+                            path=action_path,
+                            method=form.method.upper(),
+                            forms=[form.to_dict()],
+                        )
+
+                    # Merge technologies
+                    for tech in br.technologies_detected:
+                        if tech not in result.browser_technologies:
+                            result.browser_technologies.append(tech)
+                        site_graph.add_technology(tech)
+
+                # ── DOM Analysis on rendered pages ──────────────────────
+                dom_analyzer = DOMAnalyzer()
+                dom_results: List[Any] = []
+                for br in browser_results:
+                    if br.rendered_html:
+                        dom_result = dom_analyzer.analyze(
+                            url=br.url,
+                            rendered_html=br.rendered_html,
+                            js_sources=br.js_scripts,
+                        )
+                        dom_results.append(dom_result)
+
+                if dom_results:
+                    result.dom_analysis = DOMAnalyzer.get_summary(dom_results)
+
+                # ── JS Endpoint Extraction ──────────────────────────────
+                js_extractor = JSEndpointExtractor(base_url=self.target_url)
+                js_result = js_extractor.extract_all(
+                    js_sources=all_js_sources,
+                    intercepted_requests=all_api_calls,
+                )
+                result.js_endpoints = js_result
+
+                # Add JS-discovered API endpoints to SiteGraph
+                js_api_added = 0
+                for ep in js_result.endpoints:
+                    parsed = urlparse(ep.url)
+                    path = parsed.path or "/"
+                    if path not in crawled_paths:
+                        site_graph.add_endpoint(
+                            url=ep.url,
+                            path=path,
+                            method=ep.method,
+                        )
+                        crawled_paths.add(path)
+                        js_api_added += 1
+
+                await self._emit(
+                    "BROWSER_RECON_COMPLETE",
+                    f"Browser recon: {len(browser_results)} pages, "
+                    f"{browser_new_endpoints} new endpoints, "
+                    f"{js_api_added} API routes from JS",
+                    {
+                        "pages_crawled": len(browser_results),
+                        "new_endpoints": browser_new_endpoints,
+                        "js_api_routes": js_api_added,
+                        "dom_sinks": result.dom_analysis.get("total_sinks", 0) if result.dom_analysis else 0,
+                    },
+                )
+                result.agent_reasoning.append(
+                    f"Browser recon: crawled {len(browser_results)} pages, "
+                    f"found {browser_new_endpoints} new endpoints + "
+                    f"{js_api_added} JS API routes | "
+                    f"DOM sinks: {result.dom_analysis.get('total_sinks', 0) if result.dom_analysis else 0}"
+                )
+
+            except Exception as exc:
+                logger.warning("[RECON] Browser recon failed: %s", exc)
+                result.agent_reasoning.append(
+                    f"Browser recon failed (non-fatal): {exc}"
+                )
+                await self._emit(
+                    "BROWSER_RECON_ERROR",
+                    f"Browser recon failed: {exc}",
+                )
+
+        elif not PLAYWRIGHT_AVAILABLE and spa_detected:
+            result.agent_reasoning.append(
+                "SPA detected but Playwright not installed — skipping browser recon"
             )
 
         # ── Phase 2: Common Path Discovery ─────────────────────────────────
