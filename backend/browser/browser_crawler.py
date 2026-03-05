@@ -22,7 +22,7 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
 from urllib.parse import urljoin, urlparse
 
 import sys, pathlib
@@ -33,10 +33,14 @@ from utils.logger import get_logger
 logger = get_logger(__name__, "BROWSER")
 
 # ── Lazy Playwright import (graceful degradation) ───────────────────────────
+if TYPE_CHECKING:
+    from playwright.async_api import Page, BrowserContext
+
 try:
-    from playwright.async_api import async_playwright, Page, BrowserContext
+    from playwright.async_api import async_playwright as _async_playwright
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
+    _async_playwright = None  # type: ignore[assignment]
     PLAYWRIGHT_AVAILABLE = False
     logger.warning("[BROWSER] Playwright not installed — browser crawl disabled")
 
@@ -177,7 +181,7 @@ class BrowserCrawler:
 
     async def _launch(self):
         """Launch a headless browser instance."""
-        self._playwright = await async_playwright().start()
+        self._playwright = await _async_playwright().start()  # type: ignore[misc]
         self._browser = await self._playwright.chromium.launch(
             headless=True,
             args=[
@@ -285,7 +289,8 @@ class BrowserCrawler:
         result = BrowserCrawlResult(url=url)
 
         async with self._semaphore:
-            page: Page = await self._context.new_page()
+            assert self._context is not None, "BrowserCrawler not launched"
+            page: Page = await self._context.new_page()  # type: ignore[assignment]
             page_api_calls: List[InterceptedRequest] = []
 
             try:
@@ -319,8 +324,9 @@ class BrowserCrawler:
                 await self._interact(page, result)
 
                 # ── Cookies ─────────────────────────────────────────────
+                assert self._context is not None
                 cookies_list = await self._context.cookies(url)
-                result.cookies = {c["name"]: c["value"] for c in cookies_list}
+                result.cookies = {c.get("name", ""): c.get("value", "") for c in cookies_list}  # type: ignore[union-attr]
 
                 # ── Detect SPA frameworks ───────────────────────────────
                 result.technologies_detected = self._detect_spa(result.rendered_html)
