@@ -319,6 +319,29 @@ class ScanOrchestrator:
                 "endpoints_skipped": reasoning_report.endpoints_skipped,
             }
 
+            # ── Forward WAF signal to stealth subsystem ─────────────────────
+            if reasoning_report.waf_detected and hasattr(recon_agent, "engine"):
+                evasion_lvl = max(
+                    (d.evasion_level for d in reasoning_report.decisions),
+                    default=0,
+                )
+                recon_agent.engine.stealth.receive_waf_signal(
+                    reasoning_report.waf_type, evasion_lvl,
+                )
+                stealth_diag = recon_agent.engine.stealth.get_diagnostics()
+                state["stealth"] = {
+                    "waf_detected": True,
+                    "waf_type": reasoning_report.waf_type,
+                    "evasion_level": evasion_lvl,
+                    "current_delay": stealth_diag.current_delay,
+                    "current_concurrency": stealth_diag.current_concurrency,
+                    "current_encoding": stealth_diag.current_encoding,
+                }
+                logger.info(
+                    "[ORCHESTRATOR] Stealth activated: WAF=%s, evasion=%d, concurrency=%d",
+                    reasoning_report.waf_type, evasion_lvl, stealth_diag.current_concurrency,
+                )
+
             await self._broadcast(scan_id, {
                 "type": "reasoning_complete",
                 "agent": "REASONING",
@@ -724,6 +747,24 @@ class ScanOrchestrator:
             state["completed_at"] = datetime.utcnow().isoformat()
             state["duration_seconds"] = duration
             state["current_agent"] = None
+
+            # Capture final stealth telemetry
+            if hasattr(recon_agent, "engine"):
+                sd = recon_agent.engine.stealth.get_diagnostics()
+                state["stealth_diagnostics"] = {
+                    "total_requests": sd.total_requests,
+                    "threat_level": sd.threat_level_name,
+                    "current_delay": sd.current_delay,
+                    "jitter_enabled": sd.jitter_enabled,
+                    "total_jitter_s": sd.total_jitter_s,
+                    "burst_pauses": sd.burst_pauses,
+                    "waf_signals_detected": sd.waf_signals_detected,
+                    "evasion_actions_taken": sd.evasion_actions_taken,
+                    "waf_evasion_active": sd.waf_evasion_active,
+                    "current_encoding": sd.current_encoding,
+                    "current_concurrency": sd.current_concurrency,
+                    "avg_total_wait_s": sd.avg_total_wait_s,
+                }
 
             await self._broadcast(scan_id, {
                 "type": "scan_complete",
