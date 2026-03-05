@@ -93,6 +93,7 @@ class RequestEngine:
             requests_per_second=1.0 / config.scan.delay_between_requests
         )
         self.session_cookies: Dict[str, str] = {}
+        self._auth_headers: Dict[str, str] = {}  # injected by SessionManager
         self.request_count = 0
         self._baseline_response: Optional[HttpResponse] = None
 
@@ -161,7 +162,7 @@ class RequestEngine:
 
         await self.rate_limiter.acquire()
 
-        merged_headers = {**self._default_headers(), **(headers or {})}
+        merged_headers = {**self._default_headers(), **self._auth_headers, **(headers or {})}
         if self.session_cookies:
             merged_headers["Cookie"] = "; ".join(
                 f"{k}={v}" for k, v in self.session_cookies.items()

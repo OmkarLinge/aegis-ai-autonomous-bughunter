@@ -18,6 +18,10 @@ from scanner.site_graph import (
 )
 from utils.logger import get_logger, log_agent_event
 
+# ── Auth subsystem ────────────────────────────────────────────────────────
+from backend.auth.credential_store import ScanCredential
+from backend.auth.session_manager import SessionManager
+
 # ── Browser engine (graceful if Playwright missing) ──────────────────────
 try:
     from backend.browser.browser_crawler import (
@@ -50,6 +54,9 @@ class ReconResult:
     site_graph: Optional[Any] = None             # SiteGraph instance
     attack_surface: Optional[Any] = None         # AttackSurface instance
     baseline_headers: Dict[str, str] = field(default_factory=dict)
+    # ── Auth results ─────────────────────────────────────────────────
+    authenticated: bool = False
+    auth_session: Optional[Any] = None           # AuthSession dict
     # ── Browser recon results ────────────────────────────────────────
     browser_recon_enabled: bool = False
     browser_pages_crawled: int = 0
@@ -74,12 +81,15 @@ class ReconAgent:
         authorized: bool = False,
         max_depth: int = 3,
         on_event: Optional[Callable] = None,
+        auth_config: Optional[Dict[str, Any]] = None,
     ):
         self.target_url = target_url.rstrip("/")
         self.authorized = authorized
         self.max_depth = max_depth
         self.on_event = on_event
         self.engine = RequestEngine(target_url, authorized)
+        self._auth_config = auth_config
+        self._session_manager: Optional[SessionManager] = None
 
     async def _emit(self, event_type: str, message: str, details: dict = None):
         """Emit an agent event for real-time dashboard updates."""
@@ -106,6 +116,41 @@ class ReconAgent:
 
         # Build SiteGraph for this scan
         site_graph = SiteGraph(self.target_url)
+
+        # ── Phase 0a: Authentication ────────────────────────────────────
+        if self._auth_config:
+            from backend.auth.credential_store import CredentialStore
+            cred = CredentialStore.from_dict(self._auth_config)
+            if cred.has_credentials():
+                await self._emit("AUTH_START", f"Authenticating ({cred.auth_type})...")
+                result.agent_reasoning.append(
+                    f"Phase 0a: Authenticating to target ({cred.auth_type})"
+                )
+                self._session_manager = SessionManager(on_event=self.on_event)
+                auth_session = await self._session_manager.authenticate(cred)
+                result.auth_session = auth_session.to_dict()
+
+                if auth_session.login_successful:
+                    result.authenticated = True
+                    self._session_manager.apply_to_engine(self.engine)
+                    await self._emit(
+                        "AUTH_SUCCESS",
+                        f"Authenticated — {len(auth_session.cookies)} cookies captured",
+                        auth_session.to_dict(),
+                    )
+                    result.agent_reasoning.append(
+                        f"Authentication successful: {len(auth_session.cookies)} cookies, "
+                        f"jwt={'yes' if auth_session.jwt else 'no'}"
+                    )
+                else:
+                    await self._emit(
+                        "AUTH_FAILED",
+                        f"Authentication failed: {auth_session.error}",
+                        auth_session.to_dict(),
+                    )
+                    result.agent_reasoning.append(
+                        f"Authentication failed: {auth_session.error} — continuing unauthenticated"
+                    )
 
         # ── Phase 0: Robots.txt & Sitemap Discovery ─────────────────────
         await self._emit("ROBOTS_START", "Parsing robots.txt and sitemap.xml...")
