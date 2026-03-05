@@ -2,8 +2,15 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Shield, Lock, Target, Zap, AlertTriangle,
-  CheckCircle, ChevronRight, Info, Play
+  CheckCircle, ChevronRight, Info, Play, LogIn, Key, Cookie
 } from 'lucide-react'
+
+const AUTH_TYPES = [
+  { id: 'none', label: 'No Authentication', desc: 'Scan public-facing pages only', icon: '🌐' },
+  { id: 'form', label: 'Form Login', desc: 'Automate login via username/password form', icon: '📝' },
+  { id: 'jwt', label: 'JWT / Bearer Token', desc: 'Inject an existing JWT or API token', icon: '🔑' },
+  { id: 'cookie', label: 'Session Cookie', desc: 'Inject a session cookie directly', icon: '🍪' },
+]
 
 const SCAN_TYPES = [
   { id: 'sql_injection', label: 'SQL Injection', desc: 'Test for SQL injection vulnerabilities', icon: '💉' },
@@ -29,6 +36,15 @@ export default function NewScan() {
     scan_types: ['sql_injection', 'xss', 'security_headers'],
     authorized: false,
     target_name: '',
+    // Auth fields
+    auth_type: null,
+    login_url: '',
+    username: '',
+    password: '',
+    username_field: '',
+    password_field: '',
+    jwt_token: '',
+    session_cookie: '',
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -58,10 +74,23 @@ export default function NewScan() {
     url = url.replace(/\/+$/, '')
 
     try {
+      // Build request body — only include auth fields if auth_type is set
+      const body = { ...form, target_url: url }
+      if (!body.auth_type || body.auth_type === 'none') {
+        delete body.auth_type
+        delete body.login_url
+        delete body.username
+        delete body.password
+        delete body.username_field
+        delete body.password_field
+        delete body.jwt_token
+        delete body.session_cookie
+      }
+
       const res = await fetch('/api/scans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, target_url: url }),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Failed to start scan')
@@ -164,6 +193,146 @@ export default function NewScan() {
               )
             })}
           </div>
+        </div>
+
+        {/* Authenticated Scanning */}
+        <div className="card p-5">
+          <label className="block text-sm font-semibold text-aegis-text mb-3">
+            <LogIn size={14} className="inline mr-2 text-aegis-accent" />
+            Authenticated Scanning
+          </label>
+          <p className="text-xs text-aegis-muted/60 mb-3">
+            Enable to scan pages behind login (dashboards, admin panels, user settings)
+          </p>
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            {AUTH_TYPES.map(type => {
+              const selected = (form.auth_type || 'none') === type.id
+              return (
+                <button
+                  key={type.id}
+                  onClick={() => setForm(f => ({ ...f, auth_type: type.id === 'none' ? null : type.id }))}
+                  className={`flex items-center gap-2 p-2.5 rounded-lg border text-left transition-all ${
+                    selected
+                      ? 'bg-aegis-accent/10 border-aegis-accent/40 text-aegis-text'
+                      : 'bg-aegis-bg border-aegis-border text-aegis-muted hover:border-aegis-muted'
+                  }`}
+                >
+                  <span className="text-base leading-none">{type.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold truncate">{type.label}</div>
+                    <div className="text-[10px] opacity-60 truncate">{type.desc}</div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Form Login Fields */}
+          {form.auth_type === 'form' && (
+            <div className="space-y-3 pt-3 border-t border-aegis-border">
+              <div>
+                <label className="block text-xs font-medium text-aegis-muted mb-1">Login Page URL</label>
+                <input
+                  type="text"
+                  value={form.login_url}
+                  onChange={e => setForm(f => ({ ...f, login_url: e.target.value }))}
+                  placeholder="https://example.com/login"
+                  className="w-full bg-aegis-bg border border-aegis-border rounded-lg px-3 py-2 text-aegis-text font-mono text-sm placeholder-aegis-muted/50 focus:outline-none focus:border-aegis-accent transition-colors"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-aegis-muted mb-1">Username</label>
+                  <input
+                    type="text"
+                    value={form.username}
+                    onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
+                    placeholder="admin"
+                    className="w-full bg-aegis-bg border border-aegis-border rounded-lg px-3 py-2 text-aegis-text text-sm placeholder-aegis-muted/50 focus:outline-none focus:border-aegis-accent transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-aegis-muted mb-1">Password</label>
+                  <input
+                    type="password"
+                    value={form.password}
+                    onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                    placeholder="••••••••"
+                    className="w-full bg-aegis-bg border border-aegis-border rounded-lg px-3 py-2 text-aegis-text text-sm placeholder-aegis-muted/50 focus:outline-none focus:border-aegis-accent transition-colors"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-aegis-muted mb-1">Username Field <span className="opacity-50">(optional)</span></label>
+                  <input
+                    type="text"
+                    value={form.username_field}
+                    onChange={e => setForm(f => ({ ...f, username_field: e.target.value }))}
+                    placeholder="username"
+                    className="w-full bg-aegis-bg border border-aegis-border rounded-lg px-3 py-2 text-aegis-text text-sm placeholder-aegis-muted/50 focus:outline-none focus:border-aegis-accent transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-aegis-muted mb-1">Password Field <span className="opacity-50">(optional)</span></label>
+                  <input
+                    type="text"
+                    value={form.password_field}
+                    onChange={e => setForm(f => ({ ...f, password_field: e.target.value }))}
+                    placeholder="password"
+                    className="w-full bg-aegis-bg border border-aegis-border rounded-lg px-3 py-2 text-aegis-text text-sm placeholder-aegis-muted/50 focus:outline-none focus:border-aegis-accent transition-colors"
+                  />
+                </div>
+              </div>
+              <p className="text-[10px] text-aegis-muted/50 px-1">
+                Field names are auto-detected. Only fill if the login form uses non-standard input names.
+              </p>
+            </div>
+          )}
+
+          {/* JWT Token Field */}
+          {form.auth_type === 'jwt' && (
+            <div className="space-y-3 pt-3 border-t border-aegis-border">
+              <div>
+                <label className="block text-xs font-medium text-aegis-muted mb-1">
+                  <Key size={12} className="inline mr-1" />
+                  JWT / Bearer Token
+                </label>
+                <input
+                  type="text"
+                  value={form.jwt_token}
+                  onChange={e => setForm(f => ({ ...f, jwt_token: e.target.value }))}
+                  placeholder="eyJhbGciOiJIUzI1NiIs..."
+                  className="w-full bg-aegis-bg border border-aegis-border rounded-lg px-3 py-2 text-aegis-text font-mono text-xs placeholder-aegis-muted/50 focus:outline-none focus:border-aegis-accent transition-colors"
+                />
+                <p className="text-[10px] text-aegis-muted/50 mt-1 px-1">
+                  Sent as <span className="font-mono">Authorization: Bearer &lt;token&gt;</span> on every request
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Session Cookie Field */}
+          {form.auth_type === 'cookie' && (
+            <div className="space-y-3 pt-3 border-t border-aegis-border">
+              <div>
+                <label className="block text-xs font-medium text-aegis-muted mb-1">
+                  <Cookie size={12} className="inline mr-1" />
+                  Session Cookie
+                </label>
+                <input
+                  type="text"
+                  value={form.session_cookie}
+                  onChange={e => setForm(f => ({ ...f, session_cookie: e.target.value }))}
+                  placeholder="session_id=abc123; csrf_token=xyz789"
+                  className="w-full bg-aegis-bg border border-aegis-border rounded-lg px-3 py-2 text-aegis-text font-mono text-xs placeholder-aegis-muted/50 focus:outline-none focus:border-aegis-accent transition-colors"
+                />
+                <p className="text-[10px] text-aegis-muted/50 mt-1 px-1">
+                  Paste cookie string from browser DevTools — <span className="font-mono">name=value; name2=value2</span>
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Authorization */}
